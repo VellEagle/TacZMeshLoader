@@ -71,9 +71,7 @@ public class PolyMeshModel {
         }
     }
 
-    // =========================================================================
-    // 描画エントリポイント (overlay を受け取るよう修正)
-    // =========================================================================
+    // Render entry points
 
     public void renderWithTranslucentSplit(PoseStack ps, MultiBufferSource buf,
                                            ResourceLocation tex, int light, int overlay, boolean useVBO) {
@@ -104,9 +102,7 @@ public class PolyMeshModel {
         }
     }
 
-    // =========================================================================
-    // VBO 描画パス
-    // =========================================================================
+    // VBO rendering path
 
     private boolean allVboReady(int light) {
         if (meshMap.isEmpty()) return false;
@@ -157,9 +153,7 @@ public class PolyMeshModel {
         ps.popPose();
     }
 
-    // =========================================================================
-    // VertexConsumer フォールバックパス
-    // =========================================================================
+    // VertexConsumer fallback path
 
     private void renderBonesConsumer(IPolyMeshBone bone, PoseStack ps, VertexConsumer buf,
                                      int light, int overlay, float r, float g, float b, float a,
@@ -187,7 +181,12 @@ public class PolyMeshModel {
 
     public void close() {
         for (List<PolyMesh> meshes : meshMap.values()) {
-            for (PolyMesh m : meshes) m.close();
+            for (PolyMesh m : meshes) {
+                if (m != null) m.close();
+            }
         }
+        meshMap.clear();
+        translucentBones.clear();
+        meshAncestorBones.clear();
     }
 }

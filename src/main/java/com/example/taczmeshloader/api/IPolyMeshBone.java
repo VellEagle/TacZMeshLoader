@@ -6,9 +6,8 @@ import com.mojang.math.Axis;
 import java.util.List;
 
 /**
- * MeshyLoader のボーン抽象インターフェース。
- *
- * BedrockPart を直接ラップするため、外部から意識する必要はない。
+ * Bedrock poly_mesh bone abstraction.
+ * Wraps BedrockPart to provide unified interface for mesh rendering.
  */
 public interface IPolyMeshBone {
 
@@ -28,14 +27,14 @@ public interface IPolyMeshBone {
 
     boolean isVisible();
 
-    /** illuminated サフィックス付きボーンはフルブライト描画される */
+    /** Bone with "illuminated" suffix renders at full brightness */
     default boolean isIlluminated() { return false; }
 
     List<? extends IPolyMeshBone> getChildren();
 
     /**
-     * このボーンのトランスフォームを PoseStack に適用する。
-     * SBW の BedrockBone.translateAndRotateAndScale() を委譲するためにオーバーライドすること。
+     * Apply bone transform to PoseStack.
+     * Override to delegate to SBW's BedrockBone.translateAndRotateAndScale().
      */
     default void applyTransform(PoseStack poseStack) {
         poseStack.translate(getPivotX() / 16.0, getPivotY() / 16.0, getPivotZ() / 16.0);

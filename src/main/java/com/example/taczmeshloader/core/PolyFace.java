@@ -8,8 +8,8 @@ import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.api.distmarker.OnlyIn;
 
 /**
- * poly_mesh の 1 フェース（三角形 or 四角形）。
- * 三角形は縮退 quad に変換して QUADS モードで描画する。
+ * Single poly_mesh face (triangle or quad).
+ * Triangles are converted to degenerate quads for QUADS mode rendering.
  */
 @OnlyIn(Dist.CLIENT)
 public class PolyFace {
@@ -33,7 +33,7 @@ public class PolyFace {
                         int light, int overlay, float r, float g, float b, float a) {
         Matrix4f m = pose.pose();
         Matrix3f n = pose.normal();
-        // 三角形は最終頂点を複製して縮退 quad にする
+        // Convert triangles to degenerate quads
         int[] idx = (vertexCount == 3) ? new int[]{0, 1, 2, 2} : new int[]{0, 1, 2, 3};
         for (int i : idx) {
             consumer.vertex(m, posX[i], posY[i], posZ[i])

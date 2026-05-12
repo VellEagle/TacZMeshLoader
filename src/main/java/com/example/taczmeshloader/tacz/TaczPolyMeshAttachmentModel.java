@@ -258,7 +258,10 @@ public class TaczPolyMeshAttachmentModel extends BedrockAttachmentModel {
         try {
             if (this.polyMeshModel != null) {
                 this.polyMeshModel.close();
+                this.polyMeshModel = null;
             }
+            this.cachedTexture = null;
+            this.cachedRootChildren = null;
 
             var resource = Minecraft.getInstance().getResourceManager()
                     .getResource(modelLocation).orElseThrow();

@@ -24,7 +24,10 @@ public class ClientAttachmentIndexMixin {
         ResourceLocation modelId = display.getModel();
         if (modelId != null) {
             // geo_models フォルダへのパスに変換 (例: mypack:geo_models/attachment/my_scope.json)
-            ResourceLocation geoPath = new ResourceLocation(modelId.getNamespace(), "geo_models/" + modelId.getPath() + ".json");
+            ResourceLocation geoPath = ResourceLocation.fromNamespaceAndPath(
+                    modelId.getNamespace(), 
+                    "geo_models/" + modelId.getPath() + ".json"
+            );
 
             // リソースパック内にメッシュJSONが存在するかチェック
             var resource = Minecraft.getInstance().getResourceManager().getResource(geoPath);

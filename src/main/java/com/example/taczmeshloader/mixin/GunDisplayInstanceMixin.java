@@ -24,7 +24,10 @@ public class GunDisplayInstanceMixin {
             ResourceLocation modelId = display.getModelLocation();
             if (modelId != null) {
                 // geo_models フォルダへのパスに変換
-                ResourceLocation geoPath = new ResourceLocation(modelId.getNamespace(), "geo_models/" + modelId.getPath() + ".json");
+                ResourceLocation geoPath = ResourceLocation.fromNamespaceAndPath(
+                        modelId.getNamespace(), 
+                        "geo_models/" + modelId.getPath() + ".json"
+                );
 
                 // ここでメッシュをロードし、ボーン構造を完成させる！
                 polyModel.loadPolyMesh(geoPath);

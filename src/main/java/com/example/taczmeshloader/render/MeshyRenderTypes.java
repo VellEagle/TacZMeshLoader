@@ -13,13 +13,13 @@ import java.util.function.Function;
 import static net.minecraft.Util.memoize;
 
 /**
- * MeshyLoader が使用する RenderType 定義。
- *
- * translucentGlass: キャノピー・ガラス状の半透明メッシュ用。
- *   - Zテスト: LEQUAL（前後関係を尊重）
- *   - depthMask: 呼び出し元で false に設定（Z書き込みなし）
- *   - アルファブレンド: SRC_ALPHA / ONE_MINUS_SRC_ALPHA
- *   - 両面描画（カリングなし）
+ * Custom render types for MeshyLoader.
+ * 
+ * translucentGlass: For canopy/glass-like translucent meshes.
+ *   - Depth test: LEQUAL (respects depth ordering)
+ *   - Depth write: disabled (COLOR_WRITE only)
+ *   - Blend: SRC_ALPHA / ONE_MINUS_SRC_ALPHA
+ *   - Culling: disabled (double-sided)
  */
 @OnlyIn(Dist.CLIENT)
 public final class MeshyRenderTypes extends RenderType {

@@ -7,26 +7,27 @@ import com.mojang.blaze3d.vertex.*;
 import net.minecraft.client.renderer.texture.OverlayTexture;
 import org.joml.Matrix3f;
 import org.joml.Matrix4f;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * poly_mesh の 1 描画ユニット（ライトレベル・キャッシュ対応 VBO 版）。
+ * Single poly_mesh rendering unit with VBO caching and light-level support.
  */
 public class PolyMesh {
 
-    // =========================================================
-    // ▼ 描画設定トグル ▼
-    // =========================================================
+    private static final Logger LOGGER = LoggerFactory.getLogger(PolyMesh.class);
+
+    // Rendering flags
     private static final boolean FLIP_MODEL_X    = false;
     private static final boolean FLIP_MODEL_Y    = true;
     private static final boolean FLIP_UV_V       = true;
     private static final boolean FORCE_FLAT_SHADING = true;
     private static final boolean INVERT_FLAT_NORMAL = false;
-    // =========================================================
 
-    // ---- ライトレベルごとのVBOキャッシュ（最大8個） ----
+    // LRU cache: max 8 VBOs per mesh, auto-evicts oldest
     private final Map<Integer, VertexBuffer> vboCache = new LinkedHashMap<Integer, VertexBuffer>(8, 0.75f, true) {
         @Override
         protected boolean removeEldestEntry(Map.Entry<Integer, VertexBuffer> eldest) {
@@ -38,7 +39,7 @@ public class PolyMesh {
         }
     };
 
-    // ---- フォールバック用ベイク済み配列 ----
+    // Baked vertex data for fallback rendering
     private final float[] bakedX, bakedY, bakedZ;
     private final float[] bakedNX, bakedNY, bakedNZ;
     private final float[] bakedU, bakedV;
@@ -67,6 +68,11 @@ public class PolyMesh {
             if (poly.length < 3) continue;
             float faceNx = 0, faceNy = 0, faceNz = 0;
             if (FORCE_FLAT_SHADING) {
+                // Validate position indices
+                if (poly[0][0] >= positions.length || poly[1][0] >= positions.length || poly[2][0] >= positions.length) {
+                    LOGGER.warn("Invalid position indices in poly, skipping");
+                    continue;
+                }
                 float[] v0 = positions[poly[0][0]], v1 = positions[poly[1][0]], v2 = positions[poly[2][0]];
                 float ux = v1[0]-v0[0], uy = v1[1]-v0[1], uz = v1[2]-v0[2];
                 float vx = v2[0]-v0[0], vy = v2[1]-v0[1], vz = v2[2]-v0[2];
@@ -74,12 +80,24 @@ public class PolyMesh {
                 faceNy = INVERT_FLAT_NORMAL ? vz*ux-vx*uz : uz*vx-ux*vz;
                 faceNz = INVERT_FLAT_NORMAL ? vx*uy-vy*ux : ux*vy-uy*vx;
                 float len = (float)Math.sqrt(faceNx*faceNx + faceNy*faceNy + faceNz*faceNz);
-                if (len > 1e-6f) { faceNx/=len; faceNy/=len; faceNz/=len; }
+                if (len > 1e-6f) { 
+                    faceNx/=len; faceNy/=len; faceNz/=len; 
+                } else {
+                    // Degenerate triangle - use default up normal
+                    faceNx = 0; faceNy = 1; faceNz = 0;
+                }
             }
             int drawCount = (poly.length == 3) ? 4 : poly.length;
             for (int i = 0; i < drawCount; i++) {
                 int srcIdx = (poly.length == 3 && i == 3) ? 2 : i;
                 int[] vi = poly[srcIdx];
+                
+                // Validate indices before array access
+                if (vi[0] >= positions.length || vi[1] >= normals.length || vi[2] >= uvs.length) {
+                    LOGGER.warn("Out of bounds indices: pos={}, norm={}, uv={}", vi[0], vi[1], vi[2]);
+                    continue;
+                }
+                
                 float[] pos = positions[vi[0]]; float[] uv = uvs[vi[2]];
                 bakedX[vIdx] = (FLIP_MODEL_X ? -(pos[0]-pivotX) : (pos[0]-pivotX)) / 16.0f;
                 bakedY[vIdx] = (FLIP_MODEL_Y ? -(pos[1]-pivotY) : (pos[1]-pivotY)) / 16.0f;
@@ -100,38 +118,43 @@ public class PolyMesh {
         }
     }
 
-    // =========================================================================
-    // VBO 管理
-    // =========================================================================
+    // VBO management
 
     public void ensureUploaded(int packedLight) {
         if (vertexCount == 0 || vboCache.containsKey(packedLight)) return;
 
-        VertexBuffer vertexBuffer = new VertexBuffer(VertexBuffer.Usage.STATIC);
+        try {
+            VertexBuffer vertexBuffer = new VertexBuffer(VertexBuffer.Usage.STATIC);
 
-        BufferBuilder builder = new BufferBuilder(vertexCount * DefaultVertexFormat.NEW_ENTITY.getVertexSize());
-        builder.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.NEW_ENTITY);
+            BufferBuilder builder = new BufferBuilder(vertexCount * DefaultVertexFormat.NEW_ENTITY.getVertexSize());
+            builder.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.NEW_ENTITY);
 
-        for (int i = 0; i < vertexCount; i++) {
-            builder.vertex(bakedX[i], bakedY[i], bakedZ[i])
-                    .color(1f, 1f, 1f, 1f)
-                    .uv(bakedU[i], bakedV[i])
-                    .overlayCoords(OverlayTexture.NO_OVERLAY)
-                    .uv2(packedLight) // 要求されたライトレベルを焼き付ける
-                    .normal(bakedNX[i], bakedNY[i], bakedNZ[i])
-                    .endVertex();
+            for (int i = 0; i < vertexCount; i++) {
+                builder.vertex(bakedX[i], bakedY[i], bakedZ[i])
+                        .color(1f, 1f, 1f, 1f)
+                        .uv(bakedU[i], bakedV[i])
+                        .overlayCoords(OverlayTexture.NO_OVERLAY)
+                        .uv2(packedLight)
+                        .normal(bakedNX[i], bakedNY[i], bakedNZ[i])
+                        .endVertex();
+            }
+
+            vertexBuffer.bind();
+            vertexBuffer.upload(builder.end());
+            VertexBuffer.unbind();
+
+            vboCache.put(packedLight, vertexBuffer);
+        } catch (Exception e) {
+            LOGGER.error("Failed to upload VBO for light level {}", packedLight, e);
         }
-
-        vertexBuffer.bind();
-        vertexBuffer.upload(builder.end());
-        VertexBuffer.unbind();
-
-        vboCache.put(packedLight, vertexBuffer);
     }
 
     public void drawVBO(Matrix4f posePose, int packedLight) {
         VertexBuffer vbo = vboCache.get(packedLight);
-        if (vbo == null) return;
+        if (vbo == null) {
+            LOGGER.warn("VBO not ready for light level {}, skipping draw", packedLight);
+            return;
+        }
 
         vbo.bind();
         vbo.drawWithShader(posePose, RenderSystem.getProjectionMatrix(), RenderSystem.getShader());
@@ -148,9 +171,7 @@ public class PolyMesh {
         vboCache.clear();
     }
 
-    // =========================================================================
-    // フォールバック: VertexConsumer パス
-    // =========================================================================
+    // Fallback: VertexConsumer path
 
     public void compileConsumer(PoseStack.Pose pose, VertexConsumer consumer,
                                 int lightmap, int overlay,
@@ -174,31 +195,54 @@ public class PolyMesh {
         compileConsumer(pose, consumer, lightmap, overlay, red, green, blue, alpha);
     }
 
-    // =========================================================================
-    // パースユーティリティ
-    // =========================================================================
+    // JSON parsing utilities
 
     private float[][] parse2DArray(JsonArray array, int dim) {
-        if (array == null) return new float[0][0];
+        if (array == null || array.isEmpty()) return new float[0][0];
         float[][] result = new float[array.size()][dim];
         for (int i = 0; i < array.size(); i++) {
+            if (!array.get(i).isJsonArray()) {
+                LOGGER.warn("Invalid 2D array element at index {}, skipping", i);
+                continue;
+            }
             JsonArray sub = array.get(i).getAsJsonArray();
-            for (int j = 0; j < Math.min(dim, sub.size()); j++) result[i][j] = sub.get(j).getAsFloat();
+            for (int j = 0; j < Math.min(dim, sub.size()); j++) {
+                try {
+                    result[i][j] = sub.get(j).getAsFloat();
+                } catch (Exception e) {
+                    LOGGER.warn("Invalid float at [{}][{}], using 0", i, j);
+                    result[i][j] = 0;
+                }
+            }
         }
         return result;
     }
 
     private int[][][] parse3DArray(JsonArray array) {
-        if (array == null) return new int[0][0][0];
+        if (array == null || array.isEmpty()) return new int[0][0][0];
         int[][][] result = new int[array.size()][][];
         for (int i = 0; i < array.size(); i++) {
+            if (!array.get(i).isJsonArray()) {
+                LOGGER.warn("Invalid 3D array element at index {}, skipping", i);
+                result[i] = new int[0][0];
+                continue;
+            }
             JsonArray face = array.get(i).getAsJsonArray();
             result[i] = new int[face.size()][3];
             for (int j = 0; j < face.size(); j++) {
+                if (!face.get(j).isJsonArray()) {
+                    LOGGER.warn("Invalid face element at [{}][{}], using defaults", i, j);
+                    continue;
+                }
                 JsonArray vd = face.get(j).getAsJsonArray();
-                result[i][j][0] = vd.get(0).getAsInt();
-                result[i][j][1] = vd.get(1).getAsInt();
-                result[i][j][2] = vd.get(2).getAsInt();
+                for (int k = 0; k < Math.min(3, vd.size()); k++) {
+                    try {
+                        result[i][j][k] = vd.get(k).getAsInt();
+                    } catch (Exception e) {
+                        LOGGER.warn("Invalid int at [{}][{}][{}], using 0", i, j, k);
+                        result[i][j][k] = 0;
+                    }
+                }
             }
         }
         return result;
