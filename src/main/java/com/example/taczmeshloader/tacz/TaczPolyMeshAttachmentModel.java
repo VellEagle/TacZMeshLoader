@@ -115,12 +115,11 @@ public class TaczPolyMeshAttachmentModel extends BedrockAttachmentModel {
                 polyMeshModel.renderTranslucentOnly(poseStack, bs, cachedTexture, safeLight, safeOverlay, useVBO);
             poseStack.popPose();
 
-            bs.endBatch(RenderType.entityCutoutNoCull(cachedTexture));
-            bs.endBatch(RenderType.entityCutout(cachedTexture));
-            if (hasTrans) {
-                bs.endBatch(RenderType.entityTranslucentCull(cachedTexture));
-                bs.endBatch(RenderType.entityTranslucent(cachedTexture));
-            }
+            for (net.minecraft.client.renderer.RenderType rt : polyMeshModel.getUsedCutoutRenderTypes(cachedTexture))
+                bs.endBatch(rt);
+            if (hasTrans)
+                for (net.minecraft.client.renderer.RenderType rt : polyMeshModel.getUsedTranslucentRenderTypes(cachedTexture))
+                    bs.endBatch(rt);
 
             mc.gameRenderer.lightTexture().turnOffLightLayer();
             return;
@@ -162,9 +161,9 @@ public class TaczPolyMeshAttachmentModel extends BedrockAttachmentModel {
                     polyMeshModel.renderTranslucentOnly(snapPose, bufferSource, texFinal, safeLightFinal, safeOverlayFinal, useVBO);
                 snapPose.popPose();
 
-                // Attachment is always on a gun here (standalone exits before this path).
-                bufferSource.endBatch(RenderType.entityCutoutNoCull(texFinal));
-                bufferSource.endBatch(RenderType.entityCutout(texFinal));
+                // Flush all material batches (multi-material aware).
+                for (net.minecraft.client.renderer.RenderType rt : polyMeshModel.getUsedCutoutRenderTypes(texFinal))
+                    bufferSource.endBatch(rt);
                 if (hasTranslucentFinal)
                     com.example.taczmeshloader.render.MeshyBatchFlushHandler.markTranslucentPending(texFinal);
 
@@ -193,8 +192,8 @@ public class TaczPolyMeshAttachmentModel extends BedrockAttachmentModel {
 
             super.render(attachmentItem, currentGunItem, poseStack, transformType, renderType, light, overlay);
 
-            bufferSource.endBatch(RenderType.entityCutoutNoCull(cachedTexture));
-            bufferSource.endBatch(RenderType.entityCutout(cachedTexture));
+            for (net.minecraft.client.renderer.RenderType rt : polyMeshModel.getUsedCutoutRenderTypes(cachedTexture))
+                bufferSource.endBatch(rt);
             if (hasTranslucent)
                 com.example.taczmeshloader.render.MeshyBatchFlushHandler.markTranslucentPending(cachedTexture);
 
