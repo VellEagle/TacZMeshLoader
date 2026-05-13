@@ -96,9 +96,16 @@ public class TaczPolyMeshAttachmentModel extends BedrockAttachmentModel {
         int safeOverlay = (transformType == ItemDisplayContext.FIXED)
                 ? net.minecraft.client.renderer.texture.OverlayTexture.NO_OVERLAY : overlay;
 
-        boolean isStandalone = (currentGunItem == null || currentGunItem.isEmpty());
         boolean useVBO = (transformType == ItemDisplayContext.GROUND
                 || transformType == ItemDisplayContext.FIXED);
+
+        // Poly_mesh is only meaningful when the attachment is mounted on a gun.
+        // When held standalone (e.g. in hand/inventory), fall back to TacZ's default renderer
+        // to avoid GL state conflicts from double turnOnLightLayer() and mid-pass endBatch() calls.
+        if (currentGunItem == null || currentGunItem.isEmpty()) {
+            super.render(attachmentItem, currentGunItem, poseStack, transformType, renderType, light, overlay);
+            return;
+        }
 
         Minecraft mc2 = Minecraft.getInstance();
         MultiBufferSource.BufferSource bufferSource = mc2.renderBuffers().bufferSource();
@@ -136,19 +143,11 @@ public class TaczPolyMeshAttachmentModel extends BedrockAttachmentModel {
                     polyMeshModel.renderTranslucentOnly(snapPose, bufferSource, texFinal, safeLightFinal, safeOverlayFinal, useVBO);
                 snapPose.popPose();
 
-                if (isStandalone) {
-                    bufferSource.endBatch(RenderType.entityCutoutNoCull(texFinal));
-                    bufferSource.endBatch(RenderType.entityCutout(texFinal));
-                    if (hasTranslucentFinal) {
-                        bufferSource.endBatch(RenderType.entityTranslucentCull(texFinal));
-                        bufferSource.endBatch(RenderType.entityTranslucent(texFinal));
-                    }
-                } else {
-                    bufferSource.endBatch(RenderType.entityCutoutNoCull(texFinal));
-                    bufferSource.endBatch(RenderType.entityCutout(texFinal));
-                    if (hasTranslucentFinal)
-                        com.example.taczmeshloader.render.MeshyBatchFlushHandler.markTranslucentPending(texFinal);
-                }
+                // Attachment is always on a gun here (standalone exits before this path).
+                bufferSource.endBatch(RenderType.entityCutoutNoCull(texFinal));
+                bufferSource.endBatch(RenderType.entityCutout(texFinal));
+                if (hasTranslucentFinal)
+                    com.example.taczmeshloader.render.MeshyBatchFlushHandler.markTranslucentPending(texFinal);
 
                 mc2.gameRenderer.lightTexture().turnOffLightLayer();
                 org.lwjgl.opengl.GL30.glBindVertexArray(vao);
@@ -162,7 +161,8 @@ public class TaczPolyMeshAttachmentModel extends BedrockAttachmentModel {
             com.tacz.guns.compat.ar.ARCompat.resetRenderBeforeFunction();
 
         } else {
-            // Non-accelerated path: stencil is disabled after super.render().
+            // Non-accelerated path (no ARCompat / Oculus).
+            // Attachment is always mounted on a gun here (standalone exits early above).
             mc2.gameRenderer.lightTexture().turnOnLightLayer();
 
             poseStack.pushPose();
@@ -174,19 +174,10 @@ public class TaczPolyMeshAttachmentModel extends BedrockAttachmentModel {
 
             super.render(attachmentItem, currentGunItem, poseStack, transformType, renderType, light, overlay);
 
-            if (isStandalone) {
-                bufferSource.endBatch(RenderType.entityCutoutNoCull(cachedTexture));
-                bufferSource.endBatch(RenderType.entityCutout(cachedTexture));
-                if (hasTranslucent) {
-                    bufferSource.endBatch(RenderType.entityTranslucentCull(cachedTexture));
-                    bufferSource.endBatch(RenderType.entityTranslucent(cachedTexture));
-                }
-            } else {
-                bufferSource.endBatch(RenderType.entityCutoutNoCull(cachedTexture));
-                bufferSource.endBatch(RenderType.entityCutout(cachedTexture));
-                if (hasTranslucent)
-                    com.example.taczmeshloader.render.MeshyBatchFlushHandler.markTranslucentPending(cachedTexture);
-            }
+            bufferSource.endBatch(RenderType.entityCutoutNoCull(cachedTexture));
+            bufferSource.endBatch(RenderType.entityCutout(cachedTexture));
+            if (hasTranslucent)
+                com.example.taczmeshloader.render.MeshyBatchFlushHandler.markTranslucentPending(cachedTexture);
 
             mc2.gameRenderer.lightTexture().turnOffLightLayer();
         }

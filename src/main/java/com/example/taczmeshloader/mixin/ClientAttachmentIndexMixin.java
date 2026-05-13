@@ -1,5 +1,6 @@
 package com.example.taczmeshloader.mixin;
 
+import com.example.taczmeshloader.core.AttachmentIndexGuard;
 import com.example.taczmeshloader.tacz.TaczPolyMeshAttachmentModel;
 import com.tacz.guns.client.resource.ClientAssetsManager;
 import com.tacz.guns.client.resource.index.ClientAttachmentIndex;
@@ -16,11 +17,6 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(value = ClientAttachmentIndex.class, remap = false)
 public class ClientAttachmentIndexMixin {
 
-    /**
-     * After TacZ resolves the attachment model, check whether a matching poly_mesh
-     * geometry file exists and, if so, swap the model instance for a
-     * {@link TaczPolyMeshAttachmentModel}.
-     */
     // ResourceLocation(String, String) is deprecated for removal in 1.21+; no alternative exists in 1.20.1.
     @SuppressWarnings("removal")
     @Inject(method = "checkTextureAndModel", at = @At("TAIL"))
@@ -36,12 +32,13 @@ public class ClientAttachmentIndexMixin {
         // Only proceed if the geo_models JSON actually exists in the resource pack.
         if (Minecraft.getInstance().getResourceManager().getResource(geoPath).isEmpty()) return;
 
+        // Guard via AttachmentIndexGuard (external class — avoids Mixin static relocation).
+        // Prevents freeze caused by repeated loadPolyMesh calls when checkTextureAndModel
+        // is invoked per-frame by TacZ (e.g. during item-in-hand rendering).
+        if (geoPath.equals(AttachmentIndexGuard.PROCESSED.get(index))) return;
+
         BedrockModelPOJO modelPOJO = ClientAssetsManager.INSTANCE.getBedrockModelPOJO(modelId);
         if (modelPOJO == null) return;
-
-        // Skip if this index already holds a TaczPolyMeshAttachmentModel for the same path.
-        if (index.getAttachmentModel() instanceof TaczPolyMeshAttachmentModel existing
-                && geoPath.equals(existing.getLoadedPolyMeshPath())) return;
 
         BedrockVersion version = BedrockVersion.isLegacyVersion(modelPOJO)
                 ? BedrockVersion.LEGACY : BedrockVersion.NEW;
@@ -53,5 +50,8 @@ public class ClientAttachmentIndexMixin {
 
         // Use the @Accessor Mixin interface — no raw Java reflection.
         ((ClientAttachmentIndexAccessor)(Object)index).setAttachmentModel(polyModel);
+
+        // Record success — subsequent calls for this index are skipped.
+        AttachmentIndexGuard.PROCESSED.put(index, geoPath);
     }
 }

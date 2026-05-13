@@ -51,6 +51,8 @@ public class MeshyModelRegistry {
             TaczPolyMeshAttachmentModel m = ref.get();
             if (m != null) m.invalidatePolyMesh();
         }
+        // Also clear the mixin's WeakHashMap guard so F3+T triggers a full re-load.
+        com.example.taczmeshloader.core.AttachmentIndexGuard.clear();
         cleanup();
     }
 
