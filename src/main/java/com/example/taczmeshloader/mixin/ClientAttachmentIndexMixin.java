@@ -29,29 +29,29 @@ public class ClientAttachmentIndexMixin {
         ResourceLocation geoPath = new ResourceLocation(
                 modelId.getNamespace(), "geo_models/" + modelId.getPath() + ".json");
 
-        // Only proceed if the geo_models JSON actually exists in the resource pack.
+        // Only proceed if a poly_mesh JSON exists for this attachment.
         if (Minecraft.getInstance().getResourceManager().getResource(geoPath).isEmpty()) return;
 
-        // Guard via AttachmentIndexGuard (external class — avoids Mixin static relocation).
-        // Prevents freeze caused by repeated loadPolyMesh calls when checkTextureAndModel
-        // is invoked per-frame by TacZ (e.g. during item-in-hand rendering).
-        if (geoPath.equals(AttachmentIndexGuard.PROCESSED.get(index))) return;
+        // --- Tier 1: expensive loadPolyMesh only once ---
+        // Check if we already have a cached model for this index (and same path).
+        TaczPolyMeshAttachmentModel polyModel = AttachmentIndexGuard.MODEL_CACHE.get(index);
+        if (polyModel == null || !geoPath.equals(polyModel.getLoadedPolyMeshPath())) {
+            BedrockModelPOJO modelPOJO = ClientAssetsManager.INSTANCE.getBedrockModelPOJO(modelId);
+            if (modelPOJO == null) return;
 
-        BedrockModelPOJO modelPOJO = ClientAssetsManager.INSTANCE.getBedrockModelPOJO(modelId);
-        if (modelPOJO == null) return;
+            BedrockVersion version = BedrockVersion.isLegacyVersion(modelPOJO)
+                    ? BedrockVersion.LEGACY : BedrockVersion.NEW;
 
-        BedrockVersion version = BedrockVersion.isLegacyVersion(modelPOJO)
-                ? BedrockVersion.LEGACY : BedrockVersion.NEW;
+            polyModel = new TaczPolyMeshAttachmentModel(modelPOJO, version);
+            polyModel.setIsScope(display.isScope());
+            polyModel.setIsSight(display.isSight());
+            polyModel.loadPolyMesh(geoPath);
 
-        TaczPolyMeshAttachmentModel polyModel = new TaczPolyMeshAttachmentModel(modelPOJO, version);
-        polyModel.setIsScope(display.isScope());
-        polyModel.setIsSight(display.isSight());
-        polyModel.loadPolyMesh(geoPath);
+            AttachmentIndexGuard.MODEL_CACHE.put(index, polyModel);
+        }
 
-        // Use the @Accessor Mixin interface — no raw Java reflection.
+        // --- Tier 2: always re-assign the model ---
+        // TacZ may reset attachmentModel between render frames, so we re-set it every call.
         ((ClientAttachmentIndexAccessor)(Object)index).setAttachmentModel(polyModel);
-
-        // Record success — subsequent calls for this index are skipped.
-        AttachmentIndexGuard.PROCESSED.put(index, geoPath);
     }
 }

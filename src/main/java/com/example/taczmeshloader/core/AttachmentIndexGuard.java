@@ -1,23 +1,31 @@
 package com.example.taczmeshloader.core;
 
+import com.example.taczmeshloader.tacz.TaczPolyMeshAttachmentModel;
 import com.tacz.guns.client.resource.index.ClientAttachmentIndex;
-import net.minecraft.resources.ResourceLocation;
 
 import java.util.WeakHashMap;
 
 /**
- * Tracks (ClientAttachmentIndex → geoPath) pairs that have already had their poly_mesh loaded.
- * Kept in the core package (NOT in mixin.*) to avoid Mixin's package isolation restriction,
- * which prohibits non-mixin classes in the mixin package from being referenced by external code.
+ * Caches TaczPolyMeshAttachmentModel instances per ClientAttachmentIndex.
+ *
+ * <p>Two-tier strategy:
+ * <ol>
+ *   <li>Model cache: loadPolyMesh is called exactly once per index — the created model is
+ *       stored here. Prevents the per-frame freeze that occurs when loadPolyMesh reads
+ *       from disk on every checkTextureAndModel call.</li>
+ *   <li>Model assignment (setAttachmentModel) is done on EVERY checkTextureAndModel call,
+ *       because TacZ may reset the attachmentModel field between render frames.</li>
+ * </ol>
  */
 public final class AttachmentIndexGuard {
 
-    public static final WeakHashMap<ClientAttachmentIndex, ResourceLocation> PROCESSED =
+    /** Stores the created model for each index so loadPolyMesh is not repeated. */
+    public static final WeakHashMap<ClientAttachmentIndex, TaczPolyMeshAttachmentModel> MODEL_CACHE =
             new WeakHashMap<>();
 
-    /** Clears the guard — call on F3+T resource reload so geometry is re-loaded. */
+    /** Clears the cache — call on F3+T reload so models are re-created with new geometry. */
     public static synchronized void clear() {
-        PROCESSED.clear();
+        MODEL_CACHE.clear();
     }
 
     private AttachmentIndexGuard() {}

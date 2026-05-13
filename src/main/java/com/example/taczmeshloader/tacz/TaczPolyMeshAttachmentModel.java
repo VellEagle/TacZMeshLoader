@@ -99,11 +99,30 @@ public class TaczPolyMeshAttachmentModel extends BedrockAttachmentModel {
         boolean useVBO = (transformType == ItemDisplayContext.GROUND
                 || transformType == ItemDisplayContext.FIXED);
 
-        // Poly_mesh is only meaningful when the attachment is mounted on a gun.
-        // When held standalone (e.g. in hand/inventory), fall back to TacZ's default renderer
-        // to avoid GL state conflicts from double turnOnLightLayer() and mid-pass endBatch() calls.
+        // For standalone items (hand/inventory/ground/frame), TacZ's BEWLR calls our render()
+        // with currentGunItem == null. We render the poly_mesh ourselves WITHOUT calling
+        // super.render() — super internally calls turnOnLightLayer() too, causing double-toggle
+        // and GL state corruption (the original freeze).
         if (currentGunItem == null || currentGunItem.isEmpty()) {
-            super.render(attachmentItem, currentGunItem, poseStack, transformType, renderType, light, overlay);
+            Minecraft mc = Minecraft.getInstance();
+            MultiBufferSource.BufferSource bs = mc.renderBuffers().bufferSource();
+            mc.gameRenderer.lightTexture().turnOnLightLayer();
+
+            poseStack.pushPose();
+            polyMeshModel.renderCutoutOnly(poseStack, bs, cachedTexture, safeLight, safeOverlay, useVBO);
+            boolean hasTrans = polyMeshModel.hasTranslucentMeshes();
+            if (hasTrans)
+                polyMeshModel.renderTranslucentOnly(poseStack, bs, cachedTexture, safeLight, safeOverlay, useVBO);
+            poseStack.popPose();
+
+            bs.endBatch(RenderType.entityCutoutNoCull(cachedTexture));
+            bs.endBatch(RenderType.entityCutout(cachedTexture));
+            if (hasTrans) {
+                bs.endBatch(RenderType.entityTranslucentCull(cachedTexture));
+                bs.endBatch(RenderType.entityTranslucent(cachedTexture));
+            }
+
+            mc.gameRenderer.lightTexture().turnOffLightLayer();
             return;
         }
 
