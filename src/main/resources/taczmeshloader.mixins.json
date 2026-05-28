@@ -2,12 +2,14 @@
   "required": true,
   "minVersion": "0.8.5",
   "package": "com.example.taczmeshloader.mixin",
-  "compatibilityLevel": "JAVA_13",
+  "compatibilityLevel": "JAVA_17",
   "refmap": "taczmeshloader.refmap.json",
   "client": [
     "GunDisplayInstanceMixin",
     "ClientAttachmentIndexMixin",
-    "ClientAttachmentIndexAccessor"
+    "lrtactical.LrDisplayInstanceMixin$MeleeMixin",
+    "lrtactical.LrDisplayInstanceMixin$ConsumableMixin",
+    "lrtactical.LrDisplayInstanceMixin$ThrowableMixin"
   ],
   "injectors": {
     "defaultRequire": 1

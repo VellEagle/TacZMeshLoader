@@ -6,8 +6,9 @@ import com.mojang.math.Axis;
 import java.util.List;
 
 /**
- * Abstraction over a Bedrock bone used by {@code PolyMeshModel}.
- * Wraps {@code BedrockPart} so the core renderer stays TacZ-agnostic.
+ * MeshyLoader のボーン抽象インターフェース。
+ *
+ * BedrockPart を直接ラップするため、外部から意識する必要はない。
  */
 public interface IPolyMeshBone {
 
@@ -27,14 +28,14 @@ public interface IPolyMeshBone {
 
     boolean isVisible();
 
-    /** Returns true for bones whose name marks them as always fully-lit (e.g. emissive parts). */
+    /** illuminated サフィックス付きボーンはフルブライト描画される */
     default boolean isIlluminated() { return false; }
 
     List<? extends IPolyMeshBone> getChildren();
 
     /**
-     * Applies this bone's pivot/rotation/scale to the given {@link PoseStack}.
-     * Override to delegate to {@code BedrockBone.translateAndRotateAndScale()}.
+     * このボーンのトランスフォームを PoseStack に適用する。
+     * SBW の BedrockBone.translateAndRotateAndScale() を委譲するためにオーバーライドすること。
      */
     default void applyTransform(PoseStack poseStack) {
         poseStack.translate(getPivotX() / 16.0, getPivotY() / 16.0, getPivotZ() / 16.0);

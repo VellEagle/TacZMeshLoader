@@ -1,13 +1,16 @@
 modLoader="javafml"
 loaderVersion="${loader_version_range}"
-license="${mod_license}"
+license="GPL-3.0-only"
 mixinConfigs="taczmeshloader.mixins.json"
 
 [[mods]]
 modId="taczmeshloader"
-version="1.0"
+version="0.1.3"
+authors = "VellEagle"
 displayName="TacZ Mesh Loader"
-description='''${mod_description}'''
+displayURL = "https://www.curseforge.com/minecraft/mc-mods/tacz-mesh-loader"
+logoFile = "tmllogo.png"
+description='''This mod allows TacZ to load mesh geometry created with the Meshy plugin.'''
 
 [[dependencies.${mod_id}]]
     modId="forge"

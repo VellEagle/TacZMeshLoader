@@ -1,6 +1,5 @@
 package com.example.taczmeshloader.tacz;
 
-import com.example.taczmeshloader.MeshyModelRegistry;
 import com.example.taczmeshloader.core.PolyMeshModel;
 import com.example.taczmeshloader.api.IPolyMeshBone;
 import com.google.gson.JsonObject;
@@ -8,12 +7,9 @@ import com.google.gson.JsonParser;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.tacz.guns.api.TimelessAPI;
 import com.tacz.guns.client.model.bedrock.BedrockPart;
-import com.tacz.guns.client.model.bedrock.ModelRendererWrapper;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.renderer.LevelRenderer;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.RenderType;
-import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.item.ItemDisplayContext;
 import net.minecraft.world.item.ItemStack;
@@ -29,9 +25,7 @@ import java.util.stream.Collectors;
 public class TaczPolyMeshGunModel extends com.tacz.guns.client.model.BedrockGunModel {
 
     private PolyMeshModel polyMeshModel;
-    private ResourceLocation loadedPolyMeshPath = null;  // guards against redundant reloads
     private ResourceLocation cachedTexture = null;
-    private boolean textureResolveFailed = false;         // stops per-frame lookup if display is missing
     private List<IPolyMeshBone> cachedRootChildren = null;
 
     private static final org.apache.logging.log4j.Logger MESH_LOG =
@@ -41,61 +35,71 @@ public class TaczPolyMeshGunModel extends com.tacz.guns.client.model.BedrockGunM
             com.tacz.guns.client.resource.pojo.model.BedrockModelPOJO pojo,
             com.tacz.guns.client.resource.pojo.model.BedrockVersion version) {
         super(pojo, version);
-        MeshyModelRegistry.registerGunModel(this);
     }
 
     @Override
     public void render(PoseStack poseStack, ItemStack stack, ItemDisplayContext transformType,
                        RenderType renderType, int light, int overlay) {
 
-        if (!hasPolyMesh()) {
+        if (!this.hasPolyMesh()) {
+            // poly_mesh が一切ない場合は通常のキューブ描画に完全委譲
             super.render(poseStack, stack, transformType, renderType, light, overlay);
             return;
-        }
-
-        if (cachedTexture == null && !textureResolveFailed) {
-            TimelessAPI.getGunDisplay(stack).ifPresent(d -> cachedTexture = d.getModelTexture());
-            if (cachedTexture == null) textureResolveFailed = true;
         }
 
         if (cachedTexture == null) {
+            TimelessAPI.getGunDisplay(stack).ifPresent(display ->
+                    cachedTexture = display.getModelTexture()
+            );
+        }
+
+        if (cachedTexture == null) {
+            // テクスチャが取れない場合もキューブ描画は続ける
             super.render(poseStack, stack, transformType, renderType, light, overlay);
             return;
         }
 
-        boolean isFixed = (transformType == ItemDisplayContext.FIXED);
         int safeLight = light;
-        if (isFixed) {
-            Minecraft mc = Minecraft.getInstance();
-            if (mc.level != null && mc.player != null)
-                safeLight = LevelRenderer.getLightColor(mc.level, mc.player.blockPosition());
-        }
-        int safeOverlay = isFixed
-                ? net.minecraft.client.renderer.texture.OverlayTexture.NO_OVERLAY : overlay;
+        int safeOverlay = overlay;
 
         poseStack.pushPose();
-        if (isFixed) poseStack.mulPose(com.mojang.math.Axis.YP.rotationDegrees(0.0F));
 
-        boolean useVBO = (transformType == ItemDisplayContext.GROUND || isFixed);
+        boolean useVBO = (transformType == ItemDisplayContext.GROUND
+                || transformType == ItemDisplayContext.FIXED);
         Minecraft mc2 = Minecraft.getInstance();
         MultiBufferSource.BufferSource bufferSource = mc2.renderBuffers().bufferSource();
 
-        // Step 1: TacZ standard render — handles scope_sight stencil internally.
+        // ========== キューブ + メッシュ混在モデルの描画方針 ==========
+        //
+        // super.render() が担当:
+        //   - cubes を持つボーンの描画（poly_mesh との混在ボーンも含む）
+        //   - アタッチメント、マズルフラッシュ、レーザー等の機能ボーン
+        //   - ARCompat 加速パス全体の制御
+        //
+        // PolyMesh 描画が担当:
+        //   - poly_mesh を持つボーンのメッシュ頂点
+        //   - super.render() 完了後（ステンシル処理が全て終わった後）に描画
+        //
+        // cubes の消去は一切行わない。
+        // poly_mesh のみのボーンは geo.json 上で cubes が空のため TacZ は何も描画しない。
+        // 混在ボーン（cubes + poly_mesh 両方）は TacZ がキューブを、
+        // PolyMesh がメッシュを描画し、両者が正しく合わさる。
+        // ================================================================
+
+        // 1. TacZ 本来の描画（キューブボーン + 機能ボーン + scope_sight ステンシル処理）
         super.render(poseStack, stack, transformType, renderType, light, overlay);
 
-        // Step 2: Render poly_mesh after TacZ finishes so stencil is already disabled.
-        // Under ARCompat we use layer -943+4 (after TacZ's highest layer -943+3) to
-        // ensure the stencil clear has completed before our mesh is drawn.
-        final int safeLightFinal   = safeLight;
+        // 2. PolyMesh を ARCompat の最終レイヤー(-943+3) より後の -943+4 で描画する。
+        final int safeLightFinal = safeLight;
         final int safeOverlayFinal = safeOverlay;
-        final boolean useVBOfinal  = useVBO;
+        final boolean useVBOfinal = useVBO;
 
         if (com.tacz.guns.compat.ar.ARCompat.shouldAccelerate()) {
             PoseStack snapPose = new PoseStack();
             snapPose.last().pose().set(poseStack.last().pose());
             snapPose.last().normal().set(poseStack.last().normal());
-            final ResourceLocation texFinal       = cachedTexture;
-            final boolean hasTranslucentFinal     = polyMeshModel.hasTranslucentMeshes();
+            final ResourceLocation texFinal = cachedTexture;
+            final boolean hasTranslucentFinal = this.polyMeshModel.hasTranslucentMeshes();
 
             com.tacz.guns.compat.ar.ARCompat.setRenderLayer(-943 + 4);
             com.tacz.guns.compat.ar.ARCompat.setRenderBeforeFunction(() -> {
@@ -105,43 +109,45 @@ public class TaczPolyMeshGunModel extends com.tacz.guns.client.model.BedrockGunM
                 com.mojang.blaze3d.vertex.BufferUploader.invalidate();
 
                 mc2.gameRenderer.lightTexture().turnOnLightLayer();
-                snapPose.pushPose();
 
-                polyMeshModel.renderCutoutOnly(snapPose, bufferSource, texFinal, safeLightFinal, safeOverlayFinal, useVBOfinal);
+                snapPose.pushPose();
+                this.polyMeshModel.renderCutoutOnly(snapPose, bufferSource, texFinal, safeLightFinal, safeOverlayFinal, useVBOfinal);
+
                 if (!com.tacz.guns.compat.oculus.OculusCompat.endBatch(bufferSource)) {
                     bufferSource.endBatch(RenderType.entityCutoutNoCull(texFinal));
                     bufferSource.endBatch(RenderType.entityCutout(texFinal));
                 }
 
                 if (hasTranslucentFinal) {
-                    polyMeshModel.renderTranslucentOnly(snapPose, bufferSource, texFinal, safeLightFinal, safeOverlayFinal, useVBOfinal);
-                    if (!com.tacz.guns.compat.oculus.OculusCompat.endBatch(bufferSource))
+                    this.polyMeshModel.renderTranslucentOnly(snapPose, bufferSource, texFinal, safeLightFinal, safeOverlayFinal, useVBOfinal);
+                    if (!com.tacz.guns.compat.oculus.OculusCompat.endBatch(bufferSource)) {
                         bufferSource.endBatch(RenderType.entityTranslucentCull(texFinal));
+                    }
                 }
 
-                snapPose.popPose();
                 mc2.gameRenderer.lightTexture().turnOffLightLayer();
+
                 org.lwjgl.opengl.GL30.glBindVertexArray(vao);
                 com.tacz.guns.compat.ar.ARCompat.resetAcceleration();
             });
 
-            // Trigger layer -943+4 — no actual cubes, just signals ARCompat to flush.
             super.render(poseStack, transformType, renderType, light, overlay);
 
             com.tacz.guns.compat.ar.ARCompat.resetRenderLayer();
             com.tacz.guns.compat.ar.ARCompat.resetRenderBeforeFunction();
         } else {
-            // Non-accelerated path: stencil is already disabled after super.render().
             mc2.gameRenderer.lightTexture().turnOnLightLayer();
 
-            polyMeshModel.renderCutoutOnly(poseStack, bufferSource, cachedTexture, safeLightFinal, safeOverlayFinal, useVBOfinal);
+            this.polyMeshModel.renderCutoutOnly(poseStack, bufferSource, cachedTexture, safeLightFinal, safeOverlayFinal, useVBOfinal);
+
             if (!com.tacz.guns.compat.oculus.OculusCompat.endBatch(bufferSource)) {
                 bufferSource.endBatch(RenderType.entityCutoutNoCull(cachedTexture));
                 bufferSource.endBatch(RenderType.entityCutout(cachedTexture));
             }
 
-            if (polyMeshModel.hasTranslucentMeshes()) {
-                polyMeshModel.renderTranslucentOnly(poseStack, bufferSource, cachedTexture, safeLightFinal, safeOverlayFinal, useVBOfinal);
+            if (this.polyMeshModel.hasTranslucentMeshes()) {
+                this.polyMeshModel.renderTranslucentOnly(poseStack, bufferSource, cachedTexture, safeLightFinal, safeOverlayFinal, useVBOfinal);
+
                 if (!com.tacz.guns.compat.oculus.OculusCompat.endBatch(bufferSource)) {
                     if (net.minecraftforge.fml.ModList.get().isLoaded("oculus")) {
                         bufferSource.endBatch(RenderType.entityTranslucentCull(cachedTexture));
@@ -157,11 +163,25 @@ public class TaczPolyMeshGunModel extends com.tacz.guns.client.model.BedrockGunM
         poseStack.popPose();
     }
 
-    public ResourceLocation getLoadedPolyMeshPath() { return loadedPolyMeshPath; }
-
+    /**
+     * geo.json を読み込み、poly_mesh ボーンを PolyMeshModel に登録する。
+     *
+     * <h3>キューブ・メッシュ混在対応</h3>
+     * cubes の消去は一切行わない。理由は次の通り:
+     * <ul>
+     *   <li><b>poly_mesh のみ</b>のボーンは geo.json 上で cubes が元々空。
+     *       TacZ 側は何も描画しないため PolyMesh との二重描画は起きない。</li>
+     *   <li><b>cubes のみ</b>のボーンは PolyMeshModel の meshMap に存在しないため
+     *       PolyMesh 側は何もしない。TacZ が正常にキューブを描画する。</li>
+     *   <li><b>両方を持つ混在ボーン</b>は TacZ がキューブを、PolyMesh がメッシュを
+     *       それぞれ描画し、両者が正しく合わさる。cubes を消す必要はない。</li>
+     * </ul>
+     */
     public void loadPolyMesh(ResourceLocation modelLocation) {
         try {
-            if (polyMeshModel != null) polyMeshModel.close();
+            if (this.polyMeshModel != null) {
+                this.polyMeshModel.close();
+            }
 
             var resource = Minecraft.getInstance().getResourceManager()
                     .getResource(modelLocation).orElseThrow();
@@ -188,53 +208,35 @@ public class TaczPolyMeshGunModel extends com.tacz.guns.client.model.BedrockGunM
                     }
                 };
 
-                polyMeshModel = new PolyMeshModel(adaptedRoot, rawJson);
+                this.polyMeshModel = new PolyMeshModel(adaptedRoot, rawJson);
 
-                // Clear cube geometry for all bones except special effects.
-                for (ModelRendererWrapper wrapper : modelMap.values()) {
-                    if (wrapper == null || wrapper.getModelRenderer() == null) continue;
-                    String name = wrapper.getModelRenderer().name;
-                    if (name != null && (name.startsWith("muzzle_flash") || name.startsWith("laser_beam"))) continue;
-                    wrapper.getModelRenderer().cubes.clear();
-                }
+                // cubes の消去は一切行わない（クラス Javadoc 参照）
 
-                cachedTexture        = null;
-                textureResolveFailed = false;
-                cachedRootChildren   = null;
-                loadedPolyMeshPath   = modelLocation;
+                this.cachedTexture = null;
+                this.cachedRootChildren = null;
+
+                // シェーダー切り替え時に VBO キャッシュを無効化するため登録する
+                com.example.taczmeshloader.render.ShaderStateTracker.register(this.polyMeshModel);
+
+                MESH_LOG.info("[MeshyLoader] Loaded poly_mesh from: {}", modelLocation);
             }
         } catch (Exception e) {
-            MESH_LOG.error("[MeshyLoader] loadPolyMesh failed: {}", modelLocation, e);
+            MESH_LOG.error("[MeshyDebug][loadPolyMesh] FAILED: location={}", modelLocation, e);
         }
     }
 
     public boolean hasPolyMesh() { return polyMeshModel != null; }
 
-    /** Resets the cached path so the next checkTextureAndModel call will re-load geometry (e.g. F3+T). */
-    public void invalidatePolyMesh() {
-        loadedPolyMeshPath   = null;
-        textureResolveFailed = false;
-    }
-
-    public int getPolyMeshVertexCount() { return polyMeshModel != null ? polyMeshModel.getTotalVertexCount() : 0; }
-    public int getPolyMeshVboCacheSize() { return polyMeshModel != null ? polyMeshModel.getVboCacheSize() : 0; }
-
     public static void register() {
         com.tacz.guns.api.client.other.GunModelTypeManager.registerModelType(
-                "meshy", TaczPolyMeshGunModel::new);
-        MESH_LOG.info("[TacZMeshLoader] Registered model type: meshy");
+                "mesh", TaczPolyMeshGunModel::new);
+        MESH_LOG.info("[TacZMeshLoader] Registered TacZ model type: meshy");
     }
-
-    // -------------------------------------------------------------------------
-    // TaczPartAdapter — bridges BedrockPart to IPolyMeshBone
-    // -------------------------------------------------------------------------
 
     private static class TaczPartAdapter implements IPolyMeshBone {
         private final BedrockPart part;
         private List<IPolyMeshBone> cachedChildren;
-
         TaczPartAdapter(BedrockPart part) { this.part = part; }
-
         @Override public String getName()        { return part.name == null ? "" : part.name; }
         @Override public float getPivotX()       { return part.x; }
         @Override public float getPivotY()       { return part.y; }
@@ -247,16 +249,15 @@ public class TaczPolyMeshGunModel extends com.tacz.guns.client.model.BedrockGunM
         @Override public float getScaleZ()       { return part.zScale == 0 ? 1f : part.zScale; }
         @Override public boolean isVisible()     { return part.visible; }
         @Override public boolean isIlluminated() { return part.illuminated; }
-
         @Override
         public List<? extends IPolyMeshBone> getChildren() {
             if (cachedChildren != null) return cachedChildren;
             cachedChildren = new ArrayList<>();
-            if (part.children != null)
+            if (part.children != null) {
                 for (BedrockPart c : part.children) cachedChildren.add(new TaczPartAdapter(c));
+            }
             return cachedChildren;
         }
-
         @Override public void applyTransform(PoseStack ps) { part.translateAndRotateAndScale(ps); }
     }
 }

@@ -136,6 +136,8 @@ dependencies {
         jarJar.ranged(it, "[2.2.2,)")
     }
 
+    implementation fg.deobf("curse.maven:tacz-lesraisins-tactical-equipements-1273094:8087337")
+
     // TacZ 依存（compileOnly: ビルド時参照のみ、実行時は別途導入）
     implementation fg.deobf("curse.maven:timeless-and-classics-zero-1028108:8055552")
     // Mixin annotation processor

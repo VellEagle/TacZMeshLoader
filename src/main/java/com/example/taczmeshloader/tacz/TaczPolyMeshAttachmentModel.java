@@ -1,10 +1,7 @@
 package com.example.taczmeshloader.tacz;
 
-import com.example.taczmeshloader.MeshyModelRegistry;
 import com.example.taczmeshloader.core.PolyMeshModel;
 import com.example.taczmeshloader.api.IPolyMeshBone;
-import com.google.gson.JsonArray;
-import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.mojang.blaze3d.vertex.PoseStack;
@@ -12,15 +9,12 @@ import com.tacz.guns.api.TimelessAPI;
 import com.tacz.guns.api.item.IAttachment;
 import com.tacz.guns.client.model.BedrockAttachmentModel;
 import com.tacz.guns.client.model.bedrock.BedrockPart;
-import com.tacz.guns.client.model.bedrock.ModelRendererWrapper;
 import com.tacz.guns.client.resource.pojo.model.BedrockModelPOJO;
 import com.tacz.guns.client.resource.pojo.model.BedrockVersion;
 import com.tacz.guns.client.resource.index.ClientAttachmentIndex;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.renderer.LevelRenderer;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.RenderType;
-import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.item.ItemDisplayContext;
 import net.minecraft.world.item.ItemStack;
@@ -38,47 +32,41 @@ import java.util.stream.Collectors;
 public class TaczPolyMeshAttachmentModel extends BedrockAttachmentModel {
 
     private PolyMeshModel polyMeshModel;
-    private ResourceLocation loadedPolyMeshPath = null;  // guards against redundant reloads
-    private ResourceLocation cachedTexture     = null;
-    private boolean textureResolveFailed = false;         // stops per-frame lookup if index is missing
+    private ResourceLocation cachedTexture = null;
     private List<IPolyMeshBone> cachedRootChildren = null;
-    private boolean isMeshModel = false;
 
     private static final org.apache.logging.log4j.Logger MESH_LOG =
             org.apache.logging.log4j.LogManager.getLogger("MeshyLoader");
 
     public TaczPolyMeshAttachmentModel(BedrockModelPOJO pojo, BedrockVersion version) {
         super(pojo, version);
-        MeshyModelRegistry.registerAttachmentModel(this);
     }
 
     @Override
-    public void render(@Nullable ItemStack attachmentItem, ItemStack currentGunItem,
-                       PoseStack poseStack, ItemDisplayContext transformType,
-                       RenderType renderType, int light, int overlay) {
+    public void render(@Nullable ItemStack attachmentItem, ItemStack currentGunItem, PoseStack poseStack,
+                       ItemDisplayContext transformType, RenderType renderType, int light, int overlay) {
 
-        if (polyMeshModel == null || !isMeshModel) {
+        if (!this.hasPolyMesh()) {
             super.render(attachmentItem, currentGunItem, poseStack, transformType, renderType, light, overlay);
             return;
         }
 
-        // --- Resolve texture ---
-        if (cachedTexture == null && !textureResolveFailed) {
+        // ---- テクスチャ解決 ----
+        if (cachedTexture == null) {
             if (attachmentItem != null) {
-                IAttachment iAtt = IAttachment.getIAttachmentOrNull(attachmentItem);
-                if (iAtt != null)
-                    TimelessAPI.getClientAttachmentIndex(iAtt.getAttachmentId(attachmentItem))
-                            .ifPresent(idx -> cachedTexture = idx.getModelTexture());
+                IAttachment iAttachment = IAttachment.getIAttachmentOrNull(attachmentItem);
+                if (iAttachment != null) {
+                    TimelessAPI.getClientAttachmentIndex(iAttachment.getAttachmentId(attachmentItem))
+                            .ifPresent(index -> cachedTexture = index.getModelTexture());
+                }
             } else {
-                for (Map.Entry<ResourceLocation, ClientAttachmentIndex> entry
-                        : TimelessAPI.getAllClientAttachmentIndex()) {
+                for (Map.Entry<ResourceLocation, ClientAttachmentIndex> entry : TimelessAPI.getAllClientAttachmentIndex()) {
                     if (entry.getValue().getAttachmentModel() == this) {
                         cachedTexture = entry.getValue().getModelTexture();
                         break;
                     }
                 }
             }
-            if (cachedTexture == null) textureResolveFailed = true;
         }
 
         if (cachedTexture == null) {
@@ -86,62 +74,46 @@ public class TaczPolyMeshAttachmentModel extends BedrockAttachmentModel {
             return;
         }
 
-        // --- Light / overlay ---
+        // ---- ライト・オーバーレイ計算 ----
         int safeLight = light;
-        if (transformType == ItemDisplayContext.FIXED) {
-            Minecraft mc = Minecraft.getInstance();
-            if (mc.level != null && mc.player != null)
-                safeLight = LevelRenderer.getLightColor(mc.level, mc.player.blockPosition());
-        }
-        int safeOverlay = (transformType == ItemDisplayContext.FIXED)
-                ? net.minecraft.client.renderer.texture.OverlayTexture.NO_OVERLAY : overlay;
+        int safeOverlay = overlay;
 
+        boolean isStandalone = (currentGunItem == null || currentGunItem.isEmpty());
         boolean useVBO = (transformType == ItemDisplayContext.GROUND
                 || transformType == ItemDisplayContext.FIXED);
-
-        // For standalone items (hand/inventory/ground/frame), TacZ's BEWLR calls our render()
-        // with currentGunItem == null. We render the poly_mesh ourselves WITHOUT calling
-        // super.render() — super internally calls turnOnLightLayer() too, causing double-toggle
-        // and GL state corruption (the original freeze).
-        if (currentGunItem == null || currentGunItem.isEmpty()) {
-            Minecraft mc = Minecraft.getInstance();
-            MultiBufferSource.BufferSource bs = mc.renderBuffers().bufferSource();
-            mc.gameRenderer.lightTexture().turnOnLightLayer();
-
-            poseStack.pushPose();
-            polyMeshModel.renderCutoutOnly(poseStack, bs, cachedTexture, safeLight, safeOverlay, useVBO);
-            boolean hasTrans = polyMeshModel.hasTranslucentMeshes();
-            if (hasTrans)
-                polyMeshModel.renderTranslucentOnly(poseStack, bs, cachedTexture, safeLight, safeOverlay, useVBO);
-            poseStack.popPose();
-
-            for (net.minecraft.client.renderer.RenderType rt : polyMeshModel.getUsedCutoutRenderTypes(cachedTexture))
-                bs.endBatch(rt);
-            if (hasTrans)
-                for (net.minecraft.client.renderer.RenderType rt : polyMeshModel.getUsedTranslucentRenderTypes(cachedTexture))
-                    bs.endBatch(rt);
-
-            mc.gameRenderer.lightTexture().turnOffLightLayer();
-            return;
-        }
 
         Minecraft mc2 = Minecraft.getInstance();
         MultiBufferSource.BufferSource bufferSource = mc2.renderBuffers().bufferSource();
 
-        // Scopes and sights use stencil buffers under ARCompat.
-        // We defer poly_mesh rendering to layer -943+3 so the stencil is already
-        // cleared before our mesh is drawn.
-        boolean needsLayeredDeferral = transformType.firstPerson()
-                && (isScope() || isSight())
-                && com.tacz.guns.compat.ar.ARCompat.shouldAccelerate();
+        // ========== キューブ + メッシュ混在対応 ==========
+        //
+        // 銃本体と同じ設計方針:
+        //   super.render() がキューブ・ステンシル・ARCompat処理を全て担当し、
+        //   PolyMesh はその後に描画する。
+        //
+        // cubes の消去は一切行わない。
+        // poly_mesh のみのボーンは geo.json 上で cubes が元々空。
+        // 混在ボーンは TacZ がキューブを、PolyMesh がメッシュをそれぞれ描画する。
+        //
+        // sight/scope の場合:
+        //   BedrockAttachmentModel.render() 末尾で super.render()（BedrockModel.render()）が
+        //   呼ばれる時点でステンシル処理は全て完結している。
+        //   ARCompat 加速時も TaczPolyMeshGunModel と同様に -943+3/-943+4 レイヤーで対処する。
+        // =================================================
 
-        if (needsLayeredDeferral) {
+        if (com.tacz.guns.compat.ar.ARCompat.shouldAccelerate()
+                && transformType.firstPerson()
+                && (isScope() || isSight())) {
+
+            // 加速パス（sight/scope + 一人称 + ARCompat）
+            // TacZ の使う最終レイヤーは -943+2 なので、+3 はその後に処理される。
             super.render(attachmentItem, currentGunItem, poseStack, transformType, renderType, light, overlay);
 
-            final int safeLightFinal       = safeLight;
-            final int safeOverlayFinal     = safeOverlay;
-            final ResourceLocation texFinal = cachedTexture;
-            final boolean hasTranslucentFinal = polyMeshModel.hasTranslucentMeshes();
+            final int safeLightF  = safeLight;
+            final int safeOverlayF = safeOverlay;
+            final ResourceLocation texF = cachedTexture;
+            final boolean hasTrans = this.polyMeshModel.hasTranslucentMeshes();
+            final boolean standaloneF = isStandalone;
 
             PoseStack snapPose = new PoseStack();
             snapPose.last().pose().set(poseStack.last().pose());
@@ -153,78 +125,132 @@ public class TaczPolyMeshAttachmentModel extends BedrockAttachmentModel {
 
                 int vao = org.lwjgl.opengl.GL11.glGetInteger(org.lwjgl.opengl.GL30.GL_VERTEX_ARRAY_BINDING);
                 com.mojang.blaze3d.vertex.BufferUploader.invalidate();
+
                 mc2.gameRenderer.lightTexture().turnOnLightLayer();
 
                 snapPose.pushPose();
-                polyMeshModel.renderCutoutOnly(snapPose, bufferSource, texFinal, safeLightFinal, safeOverlayFinal, useVBO);
-                if (hasTranslucentFinal)
-                    polyMeshModel.renderTranslucentOnly(snapPose, bufferSource, texFinal, safeLightFinal, safeOverlayFinal, useVBO);
+                this.polyMeshModel.renderCutoutOnly(snapPose, bufferSource, texF, safeLightF, safeOverlayF, useVBO);
+                if (hasTrans) {
+                    this.polyMeshModel.renderTranslucentOnly(snapPose, bufferSource, texF, safeLightF, safeOverlayF, useVBO);
+                }
                 snapPose.popPose();
 
-                // Flush all material batches (multi-material aware).
-                for (net.minecraft.client.renderer.RenderType rt : polyMeshModel.getUsedCutoutRenderTypes(texFinal))
-                    bufferSource.endBatch(rt);
-                if (hasTranslucentFinal)
-                    com.example.taczmeshloader.render.MeshyBatchFlushHandler.markTranslucentPending(texFinal);
+                if (!com.tacz.guns.compat.oculus.OculusCompat.endBatch(bufferSource)) {
+                    bufferSource.endBatch(RenderType.entityCutoutNoCull(texF));
+                    bufferSource.endBatch(RenderType.entityCutout(texF));
+                    if (hasTrans) {
+                        bufferSource.endBatch(RenderType.entityTranslucentCull(texF));
+                    }
+                }
 
                 mc2.gameRenderer.lightTexture().turnOffLightLayer();
+
                 org.lwjgl.opengl.GL30.glBindVertexArray(vao);
                 com.tacz.guns.compat.ar.ARCompat.resetAcceleration();
             });
 
-            // Trigger layer -943+3 registration. cubes are empty so no real verts are added.
+            // -943+3 レイヤーを ARCompat に認識させるトリガー
+            super.render(poseStack, transformType, renderType, light, overlay);
+
+            com.tacz.guns.compat.ar.ARCompat.resetRenderLayer();
+            com.tacz.guns.compat.ar.ARCompat.resetRenderBeforeFunction();
+
+        } else if (com.tacz.guns.compat.ar.ARCompat.shouldAccelerate()) {
+
+            // 加速パス（sight/scope 以外）
+            // TaczPolyMeshGunModel と同じ -943+4 パターン
+            super.render(attachmentItem, currentGunItem, poseStack, transformType, renderType, light, overlay);
+
+            final int safeLightF  = safeLight;
+            final int safeOverlayF = safeOverlay;
+            final ResourceLocation texF = cachedTexture;
+            final boolean hasTrans = this.polyMeshModel.hasTranslucentMeshes();
+
+            PoseStack snapPose = new PoseStack();
+            snapPose.last().pose().set(poseStack.last().pose());
+            snapPose.last().normal().set(poseStack.last().normal());
+
+            com.tacz.guns.compat.ar.ARCompat.setRenderLayer(-943 + 4);
+            com.tacz.guns.compat.ar.ARCompat.setRenderBeforeFunction(() -> {
+                com.tacz.guns.compat.ar.ARCompat.disableAcceleration();
+
+                int vao = org.lwjgl.opengl.GL11.glGetInteger(org.lwjgl.opengl.GL30.GL_VERTEX_ARRAY_BINDING);
+                com.mojang.blaze3d.vertex.BufferUploader.invalidate();
+
+                mc2.gameRenderer.lightTexture().turnOnLightLayer();
+
+                snapPose.pushPose();
+                this.polyMeshModel.renderCutoutOnly(snapPose, bufferSource, texF, safeLightF, safeOverlayF, useVBO);
+                if (hasTrans) {
+                    this.polyMeshModel.renderTranslucentOnly(snapPose, bufferSource, texF, safeLightF, safeOverlayF, useVBO);
+                }
+                snapPose.popPose();
+
+                if (!com.tacz.guns.compat.oculus.OculusCompat.endBatch(bufferSource)) {
+                    bufferSource.endBatch(RenderType.entityCutoutNoCull(texF));
+                    bufferSource.endBatch(RenderType.entityCutout(texF));
+                    if (hasTrans) {
+                        bufferSource.endBatch(RenderType.entityTranslucentCull(texF));
+                    }
+                }
+
+                mc2.gameRenderer.lightTexture().turnOffLightLayer();
+
+                org.lwjgl.opengl.GL30.glBindVertexArray(vao);
+                com.tacz.guns.compat.ar.ARCompat.resetAcceleration();
+            });
+
             super.render(poseStack, transformType, renderType, light, overlay);
 
             com.tacz.guns.compat.ar.ARCompat.resetRenderLayer();
             com.tacz.guns.compat.ar.ARCompat.resetRenderBeforeFunction();
 
         } else {
-            // Non-accelerated path (no ARCompat / Oculus).
-            // Attachment is always mounted on a gun here (standalone exits early above).
-            mc2.gameRenderer.lightTexture().turnOnLightLayer();
 
-            poseStack.pushPose();
-            polyMeshModel.renderCutoutOnly(poseStack, bufferSource, cachedTexture, safeLight, safeOverlay, useVBO);
-            boolean hasTranslucent = polyMeshModel.hasTranslucentMeshes();
-            if (hasTranslucent)
-                polyMeshModel.renderTranslucentOnly(poseStack, bufferSource, cachedTexture, safeLight, safeOverlay, useVBO);
-            poseStack.popPose();
-
+            // 非加速パス
+            // super.render() 完了後はステンシル無効化済みなので安全に endBatch できる
             super.render(attachmentItem, currentGunItem, poseStack, transformType, renderType, light, overlay);
 
-            for (net.minecraft.client.renderer.RenderType rt : polyMeshModel.getUsedCutoutRenderTypes(cachedTexture))
-                bufferSource.endBatch(rt);
-            if (hasTranslucent)
-                com.example.taczmeshloader.render.MeshyBatchFlushHandler.markTranslucentPending(cachedTexture);
+            mc2.gameRenderer.lightTexture().turnOnLightLayer();
+
+            this.polyMeshModel.renderCutoutOnly(poseStack, bufferSource, cachedTexture, safeLight, safeOverlay, useVBO);
+            boolean hasTrans = this.polyMeshModel.hasTranslucentMeshes();
+            if (hasTrans) {
+                this.polyMeshModel.renderTranslucentOnly(poseStack, bufferSource, cachedTexture, safeLight, safeOverlay, useVBO);
+            }
+
+            if (!com.tacz.guns.compat.oculus.OculusCompat.endBatch(bufferSource)) {
+                bufferSource.endBatch(RenderType.entityCutoutNoCull(cachedTexture));
+                bufferSource.endBatch(RenderType.entityCutout(cachedTexture));
+                if (hasTrans) {
+                    if (net.minecraftforge.fml.ModList.get().isLoaded("oculus")) {
+                        bufferSource.endBatch(RenderType.entityTranslucentCull(cachedTexture));
+                    } else {
+                        com.example.taczmeshloader.render.MeshyBatchFlushHandler.markTranslucentPending(cachedTexture);
+                    }
+                }
+            }
 
             mc2.gameRenderer.lightTexture().turnOffLightLayer();
         }
     }
 
-    public ResourceLocation getLoadedPolyMeshPath() { return loadedPolyMeshPath; }
-
-    /** Resets the cached path so the next checkTextureAndModel call will re-load geometry (e.g. F3+T). */
-    public void invalidatePolyMesh() {
-        loadedPolyMeshPath   = null;
-        textureResolveFailed = false;
-    }
-
-    public boolean hasPolyMesh() { return polyMeshModel != null; }
-    public int getPolyMeshVertexCount() { return polyMeshModel != null ? polyMeshModel.getTotalVertexCount() : 0; }
-    public int getPolyMeshVboCacheSize() { return polyMeshModel != null ? polyMeshModel.getVboCacheSize() : 0; }
-
+    /**
+     * geo.json を読み込み、poly_mesh ボーンを PolyMeshModel に登録する。
+     *
+     * cubes の消去は一切行わない（TaczPolyMeshGunModel と同じ方針）。
+     */
     public void loadPolyMesh(ResourceLocation modelLocation) {
         try {
-            if (polyMeshModel != null) polyMeshModel.close();
+            if (this.polyMeshModel != null) {
+                this.polyMeshModel.close();
+            }
 
             var resource = Minecraft.getInstance().getResourceManager()
                     .getResource(modelLocation).orElseThrow();
 
             try (var reader = new InputStreamReader(resource.open())) {
                 JsonObject rawJson = JsonParser.parseReader(reader).getAsJsonObject();
-
-                // Check for poly_mesh via proper JSON traversal instead of string search.
-                isMeshModel = hasPolyMeshInJson(rawJson);
 
                 IPolyMeshBone adaptedRoot = new IPolyMeshBone() {
                     @Override public String getName()    { return "meshy_dummy_root"; }
@@ -245,56 +271,29 @@ public class TaczPolyMeshAttachmentModel extends BedrockAttachmentModel {
                     }
                 };
 
-                polyMeshModel = new PolyMeshModel(adaptedRoot, rawJson);
+                this.polyMeshModel = new PolyMeshModel(adaptedRoot, rawJson);
 
-                if (isMeshModel) {
-                    List<String> preserveBones = List.of("scope_body", "ocular_ring", "division");
-                    for (ModelRendererWrapper wrapper : modelMap.values()) {
-                        if (wrapper == null || wrapper.getModelRenderer() == null) continue;
-                        String name = wrapper.getModelRenderer().name;
-                        boolean isOcular   = name != null && name.startsWith("ocular");
-                        boolean isPreserved = name != null && preserveBones.contains(name);
-                        if (!isOcular && !isPreserved)
-                            wrapper.getModelRenderer().cubes.clear();
-                    }
-                }
+                // cubes の消去は一切行わない（クラス Javadoc 参照）
 
-                cachedTexture        = null;
-                textureResolveFailed = false;
-                cachedRootChildren   = null;
-                loadedPolyMeshPath   = modelLocation;
+                this.cachedTexture = null;
+                this.cachedRootChildren = null;
+
+                // シェーダー切り替え時に VBO キャッシュを無効化するため登録する
+                com.example.taczmeshloader.render.ShaderStateTracker.register(this.polyMeshModel);
+
+                MESH_LOG.info("[MeshyLoader] Loaded attachment poly_mesh from: {}", modelLocation);
             }
         } catch (Exception e) {
-            MESH_LOG.error("[MeshyLoader] loadPolyMesh failed for attachment: {}", modelLocation, e);
+            MESH_LOG.error("[MeshyDebug][loadPolyMesh] FAILED: location={}", modelLocation, e);
         }
     }
 
-    /**
-     * Walks the {@code minecraft:geometry[0].bones} array and returns {@code true}
-     * if any bone contains a {@code poly_mesh} key. More robust than string search.
-     */
-    private static boolean hasPolyMeshInJson(JsonObject rawJson) {
-        try {
-            JsonArray geometries = rawJson.getAsJsonArray("minecraft:geometry");
-            if (geometries == null || geometries.isEmpty()) return false;
-            JsonArray bones = geometries.get(0).getAsJsonObject().getAsJsonArray("bones");
-            if (bones == null) return false;
-            for (JsonElement bone : bones)
-                if (bone.getAsJsonObject().has("poly_mesh")) return true;
-        } catch (Exception ignored) {}
-        return false;
-    }
-
-    // -------------------------------------------------------------------------
-    // TaczPartAdapter — bridges BedrockPart to IPolyMeshBone
-    // -------------------------------------------------------------------------
+    public boolean hasPolyMesh() { return polyMeshModel != null; }
 
     private static class TaczPartAdapter implements IPolyMeshBone {
         private final BedrockPart part;
         private List<IPolyMeshBone> cachedChildren;
-
         TaczPartAdapter(BedrockPart part) { this.part = part; }
-
         @Override public String getName()        { return part.name == null ? "" : part.name; }
         @Override public float getPivotX()       { return part.x; }
         @Override public float getPivotY()       { return part.y; }
@@ -307,16 +306,15 @@ public class TaczPolyMeshAttachmentModel extends BedrockAttachmentModel {
         @Override public float getScaleZ()       { return part.zScale == 0 ? 1f : part.zScale; }
         @Override public boolean isVisible()     { return part.visible; }
         @Override public boolean isIlluminated() { return part.illuminated; }
-
         @Override
         public List<? extends IPolyMeshBone> getChildren() {
             if (cachedChildren != null) return cachedChildren;
             cachedChildren = new ArrayList<>();
-            if (part.children != null)
+            if (part.children != null) {
                 for (BedrockPart c : part.children) cachedChildren.add(new TaczPartAdapter(c));
+            }
             return cachedChildren;
         }
-
         @Override public void applyTransform(PoseStack ps) { part.translateAndRotateAndScale(ps); }
     }
 }

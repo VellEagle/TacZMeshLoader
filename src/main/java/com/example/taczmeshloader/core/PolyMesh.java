@@ -7,27 +7,36 @@ import com.mojang.blaze3d.vertex.*;
 import net.minecraft.client.renderer.texture.OverlayTexture;
 import org.joml.Matrix3f;
 import org.joml.Matrix4f;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * A single poly_mesh render unit with per-light-level VBO caching.
+ * poly_mesh の 1 描画ユニット（ライトレベル・キャッシュ対応 VBO 版）。
+ *
+ * <h3>シェーダー切り替え時の影反転バグ修正</h3>
+ * Oculus がシェーダーパックを ON/OFF すると、シャドウパスの有無や
+ * 法線変換行列の期待値が変わるため、古いライトレベルで焼き込んだ
+ * VBO がそのまま残ると影の表示が反転する。
+ *
+ * 修正: {@link #invalidateVboCache()} を用意し、シェーダー状態が変わった
+ * フレームで全 VBO キャッシュを破棄する。呼び出しは {@link PolyMeshModel}
+ * 経由で行われ、{@link com.example.taczmeshloader.render.ShaderStateTracker}
+ * がフレーム開始時に差分を検知して通知する。
  */
 public class PolyMesh {
 
-    private static final Logger LOGGER = LoggerFactory.getLogger(PolyMesh.class);
-
-    // --- Rendering toggles ---
-    private static final boolean FLIP_MODEL_X       = false;
-    private static final boolean FLIP_MODEL_Y       = true;
-    private static final boolean FLIP_UV_V          = true;
+    // =========================================================
+    // ▼ 描画設定トグル ▼
+    // =========================================================
+    private static final boolean FLIP_MODEL_X    = false;
+    private static final boolean FLIP_MODEL_Y    = true;
+    private static final boolean FLIP_UV_V       = true;
     private static final boolean FORCE_FLAT_SHADING = true;
     private static final boolean INVERT_FLAT_NORMAL = false;
+    // =========================================================
 
-    // LRU VBO cache keyed by packed light value, max 8 entries.
+    // ---- ライトレベルごとのVBOキャッシュ（最大8個） ----
     private final Map<Integer, VertexBuffer> vboCache = new LinkedHashMap<Integer, VertexBuffer>(8, 0.75f, true) {
         @Override
         protected boolean removeEldestEntry(Map.Entry<Integer, VertexBuffer> eldest) {
@@ -39,7 +48,7 @@ public class PolyMesh {
         }
     };
 
-    // Baked vertex arrays — computed once at load time.
+    // ---- フォールバック用ベイク済み配列 ----
     private final float[] bakedX, bakedY, bakedZ;
     private final float[] bakedNX, bakedNY, bakedNZ;
     private final float[] bakedU, bakedV;
@@ -54,7 +63,6 @@ public class PolyMesh {
         float[][] uvs       = parse2DArray(meshObj.getAsJsonArray("uvs"), 2);
         int[][][] polys     = parse3DArray(meshObj.getAsJsonArray("polys"));
 
-        // Count total vertices: tris are padded to 4 verts (degenerate quad).
         int totalVerts = 0;
         for (int[][] poly : polys) {
             if (poly.length >= 3) totalVerts += (poly.length == 3) ? 4 : poly.length;
@@ -67,7 +75,6 @@ public class PolyMesh {
         int vIdx = 0;
         for (int[][] poly : polys) {
             if (poly.length < 3) continue;
-
             float faceNx = 0, faceNy = 0, faceNz = 0;
             if (FORCE_FLAT_SHADING) {
                 float[] v0 = positions[poly[0][0]], v1 = positions[poly[1][0]], v2 = positions[poly[2][0]];
@@ -76,75 +83,66 @@ public class PolyMesh {
                 faceNx = INVERT_FLAT_NORMAL ? vy*uz-vz*uy : uy*vz-uz*vy;
                 faceNy = INVERT_FLAT_NORMAL ? vz*ux-vx*uz : uz*vx-ux*vz;
                 faceNz = INVERT_FLAT_NORMAL ? vx*uy-vy*ux : ux*vy-uy*vx;
-                float len = (float) Math.sqrt(faceNx*faceNx + faceNy*faceNy + faceNz*faceNz);
-                if (len > 1e-6f) { faceNx /= len; faceNy /= len; faceNz /= len; }
+                float len = (float)Math.sqrt(faceNx*faceNx + faceNy*faceNy + faceNz*faceNz);
+                if (len > 1e-6f) { faceNx/=len; faceNy/=len; faceNz/=len; }
             }
-
             int drawCount = (poly.length == 3) ? 4 : poly.length;
             for (int i = 0; i < drawCount; i++) {
                 int srcIdx = (poly.length == 3 && i == 3) ? 2 : i;
                 int[] vi = poly[srcIdx];
-                float[] pos = positions[vi[0]];
-                float[] uv  = uvs[vi[2]];
-
+                float[] pos = positions[vi[0]]; float[] uv = uvs[vi[2]];
                 bakedX[vIdx] = (FLIP_MODEL_X ? -(pos[0]-pivotX) : (pos[0]-pivotX)) / 16.0f;
                 bakedY[vIdx] = (FLIP_MODEL_Y ? -(pos[1]-pivotY) : (pos[1]-pivotY)) / 16.0f;
                 bakedZ[vIdx] = (pos[2]-pivotZ) / 16.0f;
-
                 if (FORCE_FLAT_SHADING) {
                     bakedNX[vIdx] = FLIP_MODEL_X ? -faceNx : faceNx;
                     bakedNY[vIdx] = FLIP_MODEL_Y ? -faceNy : faceNy;
                     bakedNZ[vIdx] = faceNz;
                 } else {
                     float[] n = normals[vi[1]];
-                    bakedNX[vIdx] = FLIP_MODEL_X ? -n[0] : n[0];
-                    bakedNY[vIdx] = FLIP_MODEL_Y ? -n[1] : n[1];
-                    bakedNZ[vIdx] = n[2];
+                    bakedNX[vIdx] = FLIP_MODEL_X ? -n[0] : n[0]; bakedNY[vIdx] = FLIP_MODEL_Y ? -n[1] : n[1]; bakedNZ[vIdx] = n[2];
                 }
-
-                bakedU[vIdx] = normalizedUvs ? uv[0] : (uv[0] / texWidth);
-                float v      = normalizedUvs ? uv[1] : (uv[1] / texHeight);
+                bakedU[vIdx] = normalizedUvs ? uv[0] : (uv[0]/texWidth);
+                float v = normalizedUvs ? uv[1] : (uv[1]/texHeight);
                 bakedV[vIdx] = FLIP_UV_V ? 1.0f - v : v;
                 vIdx++;
             }
         }
     }
 
-    // -------------------------------------------------------------------------
-    // VBO management
-    // -------------------------------------------------------------------------
+    // =========================================================================
+    // VBO 管理
+    // =========================================================================
 
-    /** Uploads a VBO for the given packed light level if not already cached. */
     public void ensureUploaded(int packedLight) {
         if (vertexCount == 0 || vboCache.containsKey(packedLight)) return;
 
-        try {
-            VertexBuffer vbo = new VertexBuffer(VertexBuffer.Usage.STATIC);
-            BufferBuilder builder = new BufferBuilder(vertexCount * DefaultVertexFormat.NEW_ENTITY.getVertexSize());
-            builder.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.NEW_ENTITY);
+        VertexBuffer vertexBuffer = new VertexBuffer(VertexBuffer.Usage.STATIC);
 
-            for (int i = 0; i < vertexCount; i++) {
-                builder.vertex(bakedX[i], bakedY[i], bakedZ[i])
-                        .color(1f, 1f, 1f, 1f)
-                        .uv(bakedU[i], bakedV[i])
-                        .overlayCoords(OverlayTexture.NO_OVERLAY)
-                        .uv2(packedLight)
-                        .normal(bakedNX[i], bakedNY[i], bakedNZ[i])
-                        .endVertex();
-            }
+        BufferBuilder builder = new BufferBuilder(vertexCount * DefaultVertexFormat.NEW_ENTITY.getVertexSize());
+        builder.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.NEW_ENTITY);
 
-            vbo.bind();
-            vbo.upload(builder.end());
-            VertexBuffer.unbind();
-            vboCache.put(packedLight, vbo);
-        } catch (Exception e) {
-            LOGGER.error("[PolyMesh] Failed to upload VBO for light={}", packedLight, e);
+        for (int i = 0; i < vertexCount; i++) {
+            builder.vertex(bakedX[i], bakedY[i], bakedZ[i])
+                    .color(1f, 1f, 1f, 1f)
+                    .uv(bakedU[i], bakedV[i])
+                    .overlayCoords(OverlayTexture.NO_OVERLAY)
+                    .uv2(packedLight) // 要求されたライトレベルを焼き付ける
+                    .normal(bakedNX[i], bakedNY[i], bakedNZ[i])
+                    .endVertex();
         }
+
+        vertexBuffer.bind();
+        vertexBuffer.upload(builder.end());
+        VertexBuffer.unbind();
+
+        vboCache.put(packedLight, vertexBuffer);
     }
 
     public void drawVBO(Matrix4f posePose, int packedLight) {
         VertexBuffer vbo = vboCache.get(packedLight);
         if (vbo == null) return;
+
         vbo.bind();
         vbo.drawWithShader(posePose, RenderSystem.getProjectionMatrix(), RenderSystem.getShader());
         VertexBuffer.unbind();
@@ -152,22 +150,32 @@ public class PolyMesh {
 
     public boolean isVboReady(int packedLight) { return vboCache.containsKey(packedLight); }
     public int getVertexCount() { return vertexCount; }
-    public int getVboCacheSize() { return vboCache.size(); }
 
-    public void close() {
+    /**
+     * シェーダー状態変化時に VBO キャッシュを全破棄する。
+     *
+     * Oculus がシェーダーパックを切り替えると、シャドウパスの有無や
+     * 法線行列の扱いが変わる。古い VBO には以前の状態で焼き込んだ
+     * ライト値・法線が残っているため、そのまま使うと影が反転する。
+     * キャッシュを破棄して次フレームで再アップロードさせることで解決する。
+     */
+    public void invalidateVboCache() {
         for (VertexBuffer vbo : vboCache.values()) {
-            if (vbo != null) {
-                try { vbo.close(); } catch (Exception e) {
-                    LOGGER.warn("[PolyMesh] Exception while closing VBO", e);
-                }
-            }
+            if (vbo != null) vbo.close();
         }
         vboCache.clear();
     }
 
-    // -------------------------------------------------------------------------
-    // VertexConsumer fallback path
-    // -------------------------------------------------------------------------
+    public void close() {
+        for (VertexBuffer vbo : vboCache.values()) {
+            if (vbo != null) { vbo.close(); }
+        }
+        vboCache.clear();
+    }
+
+    // =========================================================================
+    // フォールバック: VertexConsumer パス
+    // =========================================================================
 
     public void compileConsumer(PoseStack.Pose pose, VertexConsumer consumer,
                                 int lightmap, int overlay,
@@ -186,15 +194,14 @@ public class PolyMesh {
         }
     }
 
-    /** Alias kept for API compatibility. */
     public void compile(PoseStack.Pose pose, VertexConsumer consumer,
                         int lightmap, int overlay, float red, float green, float blue, float alpha) {
         compileConsumer(pose, consumer, lightmap, overlay, red, green, blue, alpha);
     }
 
-    // -------------------------------------------------------------------------
-    // Parse helpers
-    // -------------------------------------------------------------------------
+    // =========================================================================
+    // パースユーティリティ
+    // =========================================================================
 
     private float[][] parse2DArray(JsonArray array, int dim) {
         if (array == null) return new float[0][0];
