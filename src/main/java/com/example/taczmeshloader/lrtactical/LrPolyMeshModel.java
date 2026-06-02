@@ -29,7 +29,7 @@ import java.util.stream.Collectors;
  *
  * <p>{@link CustomBedrockModel} のサブクラスであるため、poly_mesh を使わない
  * 通常の cubeモデルでも完全に同じ動作をする。
- * {@link } が {@code @Redirect} で
+ * {@link LrDisplayInstanceMixin} が {@code @Redirect} で
  * {@code new CustomBedrockModel(...)} をこのクラスに差し替えることで、
  * AnimationController が最初からこのインスタンスに紐づく。</p>
  */
@@ -66,7 +66,7 @@ public class LrPolyMeshModel extends CustomBedrockModel {
 
         Minecraft mc = Minecraft.getInstance();
         MultiBufferSource.BufferSource bufferSource = mc.renderBuffers().bufferSource();
-        boolean useVBO = (ctx == ItemDisplayContext.GROUND || ctx == ItemDisplayContext.FIXED);
+        boolean useVBO = true; // 全コンテキストでVBOを使用
 
         mc.gameRenderer.lightTexture().turnOnLightLayer();
 

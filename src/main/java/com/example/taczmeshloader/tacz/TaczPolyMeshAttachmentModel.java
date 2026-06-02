@@ -79,8 +79,7 @@ public class TaczPolyMeshAttachmentModel extends BedrockAttachmentModel {
         int safeOverlay = overlay;
 
         boolean isStandalone = (currentGunItem == null || currentGunItem.isEmpty());
-        boolean useVBO = (transformType == ItemDisplayContext.GROUND
-                || transformType == ItemDisplayContext.FIXED);
+        boolean useVBO = true; // 全コンテキストでVBOを使用
 
         Minecraft mc2 = Minecraft.getInstance();
         MultiBufferSource.BufferSource bufferSource = mc2.renderBuffers().bufferSource();

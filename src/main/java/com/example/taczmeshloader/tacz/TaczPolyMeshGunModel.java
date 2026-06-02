@@ -6,6 +6,8 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.tacz.guns.api.TimelessAPI;
+import com.tacz.guns.client.model.IFunctionalRenderer;
+import com.tacz.guns.client.model.GunModelConstant;
 import com.tacz.guns.client.model.bedrock.BedrockPart;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.MultiBufferSource;
@@ -26,7 +28,11 @@ public class TaczPolyMeshGunModel extends com.tacz.guns.client.model.BedrockGunM
 
     private PolyMeshModel polyMeshModel;
     private ResourceLocation cachedTexture = null;
+    /** LODモデル用にテクスチャを固定する場合にセット。nullなら通常通りTimelessAPIから取得。 */
+    private ResourceLocation overrideTexture = null;
     private List<IPolyMeshBone> cachedRootChildren = null;
+    /** additional_magazine アニメーション中は true。magazine サブツリーを通常描画から除外するために使う。 */
+    private boolean additionalMagRendering = false;
 
     private static final org.apache.logging.log4j.Logger MESH_LOG =
             org.apache.logging.log4j.LogManager.getLogger("MeshyLoader");
@@ -48,9 +54,13 @@ public class TaczPolyMeshGunModel extends com.tacz.guns.client.model.BedrockGunM
         }
 
         if (cachedTexture == null) {
-            TimelessAPI.getGunDisplay(stack).ifPresent(display ->
-                    cachedTexture = display.getModelTexture()
-            );
+            if (overrideTexture != null) {
+                cachedTexture = overrideTexture;
+            } else {
+                TimelessAPI.getGunDisplay(stack).ifPresent(display ->
+                        cachedTexture = display.getModelTexture()
+                );
+            }
         }
 
         if (cachedTexture == null) {
@@ -64,8 +74,7 @@ public class TaczPolyMeshGunModel extends com.tacz.guns.client.model.BedrockGunM
 
         poseStack.pushPose();
 
-        boolean useVBO = (transformType == ItemDisplayContext.GROUND
-                || transformType == ItemDisplayContext.FIXED);
+        boolean useVBO = true; // 全コンテキストでVBOを使用
         Minecraft mc2 = Minecraft.getInstance();
         MultiBufferSource.BufferSource bufferSource = mc2.renderBuffers().bufferSource();
 
@@ -88,6 +97,14 @@ public class TaczPolyMeshGunModel extends com.tacz.guns.client.model.BedrockGunM
 
         // 1. TacZ 本来の描画（キューブボーン + 機能ボーン + scope_sight ステンシル処理）
         super.render(poseStack, stack, transformType, renderType, light, overlay);
+
+        // additional_magazine アニメーション中は magazine サブツリーを
+        // FunctionalRenderer 内で描画するため、通常パスでは除外する
+        if (additionalMagRendering) {
+            polyMeshModel.setExcludeSubtree(GunModelConstant.MAG_NORMAL_NODE);
+        } else {
+            polyMeshModel.clearExcludeSubtree();
+        }
 
         // 2. PolyMesh を ARCompat の最終レイヤー(-943+3) より後の -943+4 で描画する。
         final int safeLightFinal = safeLight;
@@ -226,6 +243,72 @@ public class TaczPolyMeshGunModel extends com.tacz.guns.client.model.BedrockGunM
     }
 
     public boolean hasPolyMesh() { return polyMeshModel != null; }
+
+    /** LODモデル用テクスチャを固定する。checkLod介入時に呼ぶ。 */
+    public void setOverrideTexture(ResourceLocation texture) {
+        this.overrideTexture = texture;
+        this.cachedTexture = null; // キャッシュをリセット
+    }
+
+    /**
+     * additional_magazine の FunctionalRenderer をオーバーライドし、
+     * キューブ描画後に poly_mesh も同じ poseStack（= additional_magazine のtransform済み）で描画する。
+     *
+     * cubeモデルでは renderAdditionalMagazine が additional_magazine のtransform下で
+     * magazineNode のキューブを直接 compile() するが、poly_mesh は PolyMeshModel の
+     * 独自ツリーで描画するため additional_magazine のtransformが無視される。
+     * このオーバーライドでその問題を解決する。
+     */
+    @Override
+    public void setFunctionalRenderer(String node,
+            java.util.function.Function<com.tacz.guns.client.model.bedrock.BedrockPart,
+                    IFunctionalRenderer> function) {
+        super.setFunctionalRenderer(node, function);
+
+        if (GunModelConstant.MAG_ADDITIONAL_NODE.equals(node)) {
+            // super が登録した FunctionalRenderer をラップして poly_mesh 描画を追加する
+            com.tacz.guns.client.model.bedrock.ModelRendererWrapper wrapper =
+                    modelMap.get(GunModelConstant.MAG_ADDITIONAL_NODE);
+            if (wrapper == null) return;
+
+            com.tacz.guns.client.model.bedrock.BedrockPart part = wrapper.getModelRenderer();
+            if (!(part instanceof com.tacz.guns.client.model.FunctionalBedrockPart functionalPart)) return;
+
+            java.util.function.Function<com.tacz.guns.client.model.bedrock.BedrockPart,
+                    IFunctionalRenderer> original = functionalPart.functionalRenderer;
+            if (original == null) return;
+
+            functionalPart.functionalRenderer = (bp) -> {
+                IFunctionalRenderer originalRenderer = original.apply(bp);
+                return (poseStack, vertexBuffer, transformType, light, overlay) -> {
+                    // additional_magazine 描画中フラグをセット
+                    additionalMagRendering = true;
+                    // 1. 元の描画（キューブ）
+                    if (originalRenderer != null) {
+                        originalRenderer.render(poseStack, vertexBuffer, transformType, light, overlay);
+                    }
+                    additionalMagRendering = false;
+                    // 2. magazine サブツリーのpoly_meshのみを
+                    //    additional_magazine のtransform済み poseStack で描画
+                    // （全体を再描画すると銃本体が二重描画されるため magazine 以下のみ）
+                    if (hasPolyMesh() && cachedTexture != null
+                            && polyMeshModel.hasMeshInSubtree(GunModelConstant.MAG_NORMAL_NODE)) {
+                        net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
+                        net.minecraft.client.renderer.MultiBufferSource.BufferSource bufferSource =
+                                mc.renderBuffers().bufferSource();
+                        mc.gameRenderer.lightTexture().turnOnLightLayer();
+
+                        polyMeshModel.renderSubtree(GunModelConstant.MAG_NORMAL_NODE,
+                                poseStack, bufferSource, cachedTexture, light, overlay, true);
+                        if (!com.tacz.guns.compat.oculus.OculusCompat.endBatch(bufferSource)) {
+                            bufferSource.endBatch(net.minecraft.client.renderer.RenderType.entityCutoutNoCull(cachedTexture));
+                        }
+                        mc.gameRenderer.lightTexture().turnOffLightLayer();
+                    }
+                };
+            };
+        }
+    }
 
     public static void register() {
         com.tacz.guns.api.client.other.GunModelTypeManager.registerModelType(

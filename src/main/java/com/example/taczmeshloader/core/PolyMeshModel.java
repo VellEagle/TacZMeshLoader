@@ -23,6 +23,12 @@ public class PolyMeshModel {
     private final Set<String> translucentBones = new HashSet<>();
     private final boolean hasTranslucent;
     private final Set<String> meshAncestorBones = new HashSet<>();
+    /** poly_mesh を持ち illuminated 扱いになるボーン名セット（祖先伝播考慮済み） */
+    private final Set<String> illuminatedBones = new HashSet<>();
+    /** 描画から除外するサブツリーのルートボーン名（additional_magazine 対応用） */
+    private String excludeSubtreeRoot = null;
+    /** excludeSubtreeRoot 配下のボーン名セット（毎回計算しないようキャッシュ） */
+    private final Set<String> excludedBones = new HashSet<>();
 
     private static final Function<ResourceLocation, RenderType> TRANSLUCENT_CULL =
             Util.memoize(RenderType::entityTranslucentCull);
@@ -35,6 +41,7 @@ public class PolyMeshModel {
         }
         this.hasTranslucent = !translucentBones.isEmpty();
         buildMeshAncestors(this.root, new ArrayDeque<>());
+        buildIlluminatedBones(this.root, false);
     }
 
     public boolean hasTranslucentMeshes() { return hasTranslucent; }
@@ -47,6 +54,17 @@ public class PolyMeshModel {
         if (has) meshAncestorBones.addAll(path);
         path.removeLast();
         return has;
+    }
+
+    /** illuminated フラグを祖先から子へ伝播させ、poly_mesh を持つボーンを illuminatedBones に登録する */
+    private void buildIlluminatedBones(IPolyMeshBone bone, boolean parentIlluminated) {
+        boolean illuminated = parentIlluminated || bone.isIlluminated();
+        if (illuminated && meshMap.containsKey(bone.getName())) {
+            illuminatedBones.add(bone.getName());
+        }
+        for (IPolyMeshBone child : bone.getChildren()) {
+            buildIlluminatedBones(child, illuminated);
+        }
     }
 
     private void parsePolyMeshes(JsonObject rawJson) {
@@ -110,16 +128,29 @@ public class PolyMeshModel {
 
     private boolean allVboReady(int light) {
         if (meshMap.isEmpty()) return false;
-        for (List<PolyMesh> meshes : meshMap.values()) {
-            for (PolyMesh m : meshes) { if (!m.isVboReady(light)) return false; }
+        for (Map.Entry<String, List<PolyMesh>> entry : meshMap.entrySet()) {
+            int checkLight = illuminatedBones.contains(entry.getKey()) ? ILLUMINATED_LIGHT : light;
+            for (PolyMesh m : entry.getValue()) {
+                if (!m.isVboReady(checkLight)) return false;
+            }
         }
         return true;
     }
 
+    private static final int ILLUMINATED_LIGHT = 15728880; // LightTexture.pack(15,15)
+
     private void ensureAllUploaded(int light) {
-        for (List<PolyMesh> meshes : meshMap.values()) {
-            for (PolyMesh m : meshes) m.ensureUploaded(light);
+        // illuminated ボーンは actualLight=15728880 で drawVBO が呼ばれるため
+        // 通常ライトではなく 15728880 で VBO をベイクする必要がある
+        for (Map.Entry<String, List<PolyMesh>> entry : meshMap.entrySet()) {
+            int bakeLight = isIlluminatedBone(entry.getKey()) ? ILLUMINATED_LIGHT : light;
+            for (PolyMesh m : entry.getValue()) m.ensureUploaded(bakeLight);
         }
+    }
+
+    /** ボーン名またはその祖先に _illuminated サフィックスがあるか判定する */
+    private boolean isIlluminatedBone(String boneName) {
+        return illuminatedBones.contains(boneName);
     }
 
     /**
@@ -150,8 +181,18 @@ public class PolyMeshModel {
     }
 
     private void renderBonesVBO(IPolyMeshBone bone, PoseStack ps, int light, boolean translucentPass) {
+        renderBonesVBO(bone, ps, light, translucentPass, false);
+    }
+
+    private void renderBonesVBO(IPolyMeshBone bone, PoseStack ps, int light, boolean translucentPass,
+                                 boolean parentIlluminated) {
         if (!bone.isVisible()) return;
         if (!meshAncestorBones.contains(bone.getName())) return;
+        // additional_magazine アニメーション中は magazine サブツリーを除外
+        if (!excludedBones.isEmpty() && excludedBones.contains(bone.getName())) return;
+
+        // 祖先ボーンの illuminated を子へ伝播する
+        boolean illuminated = parentIlluminated || bone.isIlluminated();
 
         ps.pushPose();
         bone.applyTransform(ps);
@@ -160,7 +201,7 @@ public class PolyMeshModel {
         if (isTranslucent == translucentPass) {
             List<PolyMesh> meshes = meshMap.get(bone.getName());
             if (meshes != null) {
-                int actualLight = bone.isIlluminated() ? 15728880 : light;
+                int actualLight = illuminated ? 15728880 : light;
                 for (PolyMesh mesh : meshes) {
                     mesh.drawVBO(ps.last().pose(), actualLight);
                 }
@@ -168,7 +209,7 @@ public class PolyMeshModel {
         }
 
         for (IPolyMeshBone child : bone.getChildren()) {
-            renderBonesVBO(child, ps, light, translucentPass);
+            renderBonesVBO(child, ps, light, translucentPass, illuminated);
         }
 
         ps.popPose();
@@ -181,8 +222,19 @@ public class PolyMeshModel {
     private void renderBonesConsumer(IPolyMeshBone bone, PoseStack ps, VertexConsumer buf,
                                      int light, int overlay, float r, float g, float b, float a,
                                      boolean translucentPass) {
+        renderBonesConsumer(bone, ps, buf, light, overlay, r, g, b, a, translucentPass, false);
+    }
+
+    private void renderBonesConsumer(IPolyMeshBone bone, PoseStack ps, VertexConsumer buf,
+                                     int light, int overlay, float r, float g, float b, float a,
+                                     boolean translucentPass, boolean parentIlluminated) {
         if (!bone.isVisible()) return;
         if (!meshAncestorBones.contains(bone.getName())) return;
+        // additional_magazine アニメーション中は magazine サブツリーを除外
+        if (!excludedBones.isEmpty() && excludedBones.contains(bone.getName())) return;
+
+        // 祖先ボーンの illuminated を子へ伝播する
+        boolean illuminated = parentIlluminated || bone.isIlluminated();
 
         ps.pushPose();
         bone.applyTransform(ps);
@@ -191,15 +243,75 @@ public class PolyMeshModel {
         if (isTranslucent == translucentPass) {
             List<PolyMesh> meshes = meshMap.get(bone.getName());
             if (meshes != null) {
-                int actualLight = bone.isIlluminated() ? 15728880 : light;
+                int actualLight = illuminated ? 15728880 : light;
                 for (PolyMesh mesh : meshes) mesh.compileConsumer(ps.last(), buf, actualLight, overlay, r, g, b, a);
             }
         }
         for (IPolyMeshBone child : bone.getChildren()) {
-            renderBonesConsumer(child, ps, buf, light, overlay, r, g, b, a, translucentPass);
+            renderBonesConsumer(child, ps, buf, light, overlay, r, g, b, a, translucentPass, illuminated);
         }
 
         ps.popPose();
+    }
+
+    /**
+     * 指定したボーン名をルートとしてその配下のpoly_meshのみを描画する。
+     * additional_magazine の FunctionalRenderer から呼ばれ、
+     * magazine 系ボーンのpoly_meshを additional_magazine のtransform下で描画するために使う。
+     *
+     * @param rootBoneName このボーン配下のpoly_meshのみを描画する
+     */
+    /** 指定ボーン配下を通常描画から除外する（additional_magazine アニメーション中に使用） */
+    public void setExcludeSubtree(String rootBoneName) {
+        if (rootBoneName.equals(excludeSubtreeRoot)) return;
+        excludeSubtreeRoot = rootBoneName;
+        excludedBones.clear();
+        IPolyMeshBone bone = findBone(this.root, rootBoneName);
+        if (bone != null) collectSubtreeBones(bone, excludedBones);
+    }
+
+    public void clearExcludeSubtree() {
+        excludeSubtreeRoot = null;
+        excludedBones.clear();
+    }
+
+    private void collectSubtreeBones(IPolyMeshBone bone, Set<String> result) {
+        result.add(bone.getName());
+        for (IPolyMeshBone child : bone.getChildren()) collectSubtreeBones(child, result);
+    }
+
+    public void renderSubtree(String rootBoneName, PoseStack ps, MultiBufferSource buf,
+                               ResourceLocation tex, int light, int overlay, boolean useVBO) {
+        IPolyMeshBone targetBone = findBone(this.root, rootBoneName);
+        if (targetBone == null) return;
+
+        VertexConsumer vc = buf.getBuffer(RenderType.entityCutoutNoCull(tex));
+        renderBonesConsumer(targetBone, ps, vc, light, overlay, 1f, 1f, 1f, 1f, false, false);
+    }
+
+    /** ボーン名でツリーを検索する */
+    private IPolyMeshBone findBone(IPolyMeshBone bone, String name) {
+        if (name.equals(bone.getName())) return bone;
+        for (IPolyMeshBone child : bone.getChildren()) {
+            IPolyMeshBone found = findBone(child, name);
+            if (found != null) return found;
+        }
+        return null;
+    }
+
+    /** magazine系ボーン名かどうか判定（additional_magazine下で描画すべきボーン） */
+    public boolean hasMeshInSubtree(String boneName) {
+        IPolyMeshBone bone = findBone(this.root, boneName);
+        if (bone == null) return false;
+        return hasMeshInSubtreeInternal(bone);
+    }
+
+    private boolean hasMeshInSubtreeInternal(IPolyMeshBone bone) {
+        if (meshMap.containsKey(bone.getName())) return true;
+        for (IPolyMeshBone child : bone.getChildren()) {
+            if (hasMeshInSubtreeInternal(child)) return true;
+        }
+        return false;
     }
 
     public void close() {
