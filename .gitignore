@@ -1,0 +1,20 @@
+# Gradle
+.gradle/
+build/
+out/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# Run/Test環境
+run/
+runs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

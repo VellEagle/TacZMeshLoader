@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "id": "taczmeshloader",
+  "version": "0.1.7",
+  "name": "TacZ Mesh Loader",
+  "description": "This mod allows TacZ Refabricated to load mesh geometry created with the Meshy plugin.",
+  "authors": ["VellEagle"],
+  "contact": {
+    "homepage": "https://www.curseforge.com/minecraft/mc-mods/tacz-mesh-loader"
+  },
+  "license": "GPL-3.0-only",
+  "icon": "assets/taczmeshloader/icon.png",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "com.example.taczmeshloader.TacZMeshLoaderMod"
+    ]
+  },
+  "mixins": [
+    "taczmeshloader.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=0.17.2",
+    "fabric": "*",
+    "minecraft": "1.21.1",
+    "tacz": "*"
+  }
+}

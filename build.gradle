@@ -1,0 +1,55 @@
+plugins {
+    id 'fabric-loom' version '1.11-SNAPSHOT'
+    id 'maven-publish'
+}
+
+version = "1.0.0"
+group = "com.example"
+
+base {
+    archivesName = "taczmeshloader-fabric-1.21.1"
+}
+
+loom {
+    mixin {
+        defaultRefmapName = "taczmeshloader.refmap.json"
+    }
+}
+
+repositories {
+    mavenCentral()
+    maven {
+        url "https://cursemaven.com"
+        content { includeGroup "curse.maven" }
+    }
+    maven { url "https://api.modrinth.com/maven" }
+    maven {
+        name = "Jared's maven"
+        url = "https://maven.blamejared.com/"
+    }
+    flatDir {
+        dir("libs")
+    }
+
+    maven {
+        name = "ParchmentMC"
+        url = "https://maven.parchmentmc.org"
+    }
+}
+
+dependencies {
+    minecraft "com.mojang:minecraft:1.21.1"
+    mappings loom.layered() {
+        officialMojangMappings()
+        parchment("org.parchmentmc.data:parchment-1.21.1:2024.11.17@zip")
+    }
+    modImplementation "net.fabricmc:fabric-loader:0.17.2"
+    modImplementation "net.fabricmc.fabric-api:fabric-api:0.116.5+1.21.1"
+
+    modImplementation "curse.maven:tacz-refabricated-1334246:8153698"
+
+    // TACZ Refabricated (Fabric port)
+    // ローカルの依存: gradle.properties や libs ディレクトリで管理推奨
+    // curse.maven や modrinth から取得する場合は適宜変更してください
+    // 例: modCompileOnly "curse.maven:tacz-refabricated-XXXXXX:XXXXXXX"
+}
