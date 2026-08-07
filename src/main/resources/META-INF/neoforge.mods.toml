@@ -1,0 +1,39 @@
+modLoader="javafml"
+loaderVersion="[4,)"
+license="GPL-3.0-only"
+
+[[dependencies.taczmeshloader]]
+modId="neoforge"
+type="required"
+versionRange="[21.1,)"
+ordering="NONE"
+side="BOTH"
+
+[[dependencies.taczmeshloader]]
+modId="minecraft"
+type="required"
+versionRange="[1.21.1,1.22)"
+ordering="NONE"
+side="BOTH"
+
+[[dependencies.taczmeshloader]]
+modId="tacz"
+type="required"
+versionRange="[1.0,)"
+ordering="AFTER"
+side="CLIENT"
+
+[[mods]]
+modId="taczmeshloader"
+version="0.1.7"
+authors = "VellEagle"
+displayName="TacZ Mesh Loader"
+displayURL = "https://www.curseforge.com/minecraft/mc-mods/tacz-mesh-loader"
+logoFile = "tmllogo.png"
+description='''This mod allows TacZ to load mesh geometry created with the Meshy plugin.'''
+
+[[mixins]]
+config = "taczmeshloader.mixins.json"
+
+[modproperties.taczmeshloader]
+catalogueImageIcon = "assets/taczmeshloader/icon.png"
