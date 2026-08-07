@@ -103,6 +103,10 @@ public final class ShaderStateTracker {
         if (lastShaderState != currentState) {
             lastShaderState = currentState;
             // シェーダー状態が変わった → 全 VBO キャッシュを破棄
+            org.apache.logging.log4j.LogManager.getLogger("MeshyLoaderPerf")
+                    .info("[MeshyPerf] ShaderStateTracker: state changed to {} -> invalidating {} model(s). screenOpen={}",
+                            currentState, registeredModels.size(),
+                            net.minecraft.client.Minecraft.getInstance().screen != null);
             for (PolyMeshModel model : registeredModels) {
                 model.invalidateVboCache();
             }

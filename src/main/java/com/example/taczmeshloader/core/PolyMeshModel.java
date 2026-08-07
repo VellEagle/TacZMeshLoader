@@ -23,6 +23,13 @@ public class PolyMeshModel {
     private final Set<String> translucentBones = new HashSet<>();
     private final boolean hasTranslucent;
     private final Set<String> meshAncestorBones = new HashSet<>();
+
+    /**
+     * 「このライト値については既に meshMap の全ボーンをアップロード済み」を
+     * 記録する集合。allVboReady() をボーンツリーの走査無しで O(1) 判定できる
+     * ようにするためのもの（詳細は allVboReady/ensureAllUploaded のコメント参照）。
+     */
+    private final Set<Integer> fullyUploadedLights = new HashSet<>();
     /** poly_mesh を持ち illuminated 扱いになるボーン名セット（祖先伝播考慮済み） */
     private final Set<String> illuminatedBones = new HashSet<>();
     /** 描画から除外するサブツリーのルートボーン名（additional_magazine 対応用） */
@@ -126,32 +133,54 @@ public class PolyMeshModel {
     // VBO 管理
     // =========================================================================
 
+    /**
+     * 現在のボーンツリーを辿り、実際に描画され得る（isVisible()==true かつ
+     * meshAncestorBones/excludedBones の条件を満たす）poly_mesh ボーン名を
+     * 収集する。renderBonesVBO() の枝刈り条件と完全に一致させること。
+     *
+     * 【最適化の狙い】装着していない弾倉バリエーションなど、モデルによっては
+     * 「同時に描画されることのない」代替パーツが多数のボーンに分割されている
+     * ことがある。これらは isVisible()==false のため実際には描画されないが、
+     * 元のコードは allVboReady() / ensureAllUploaded() で meshMap の
+     * 全ボーンを無条件にチェック・アップロードしていたため、ライトレベルが
+     * 変わるたびに「現在表示されていないボーン」まで含めて毎回フルアップロード
+     * が走っていた。ボーン数が多い（＝装着バリエーションが豊富な）モデルほど
+     * この無駄なコストが大きくなる。本来描画されるボーンだけに限定することで、
+     * 見た目やボーンの独立した表示切り替えには一切影響を与えずに、この無駄を
+     * 削減する。
+     */
+    /**
+     * 現在のライト値について、meshMap の全ボーンが VBO アップロード済みかどうか。
+     *
+     * 【設計変更の経緯】以前はボーンツリーを毎フレーム走査して「今表示中の
+     * ボーンだけ」を対象にチェックしていたが、これには2つの問題があった:
+     *   1. ツリー走査自体のコスト（HashSet 割り当てを含む）が毎フレーム発生する
+     *   2. リロード等でボーンの表示/非表示が頻繁に切り替わるアニメーション中や、
+     *      移動によってライト値が細かく変動する状況で、"表示中ボーンの一部が
+     *      未アップロード" と判定される頻度が上がり、その都度アップロード
+     *      処理（ensureAllUploaded）が走ってしまう
+     *
+     * 今回は「あるライト値について、一度でも ensureAllUploaded() が完走した
+     * ことがあるか」を {@link #fullyUploadedLights} で記録するだけにした。
+     * ensureAllUploaded() は常に meshMap の全ボーン（表示/非表示問わず）を
+     * 対象にするため、一度完走すれば、以後そのライト値については
+     * どのボーンが表示されようと（表示が切り替わろうと）再チェックが不要に
+     * なる。これにより allVboReady() はボーンツリーを一切走査しない、
+     * 単純な O(1) の集合参照だけで済むようになった。
+     */
     private boolean allVboReady(int light) {
         if (meshMap.isEmpty()) return false;
-        for (Map.Entry<String, List<PolyMesh>> entry : meshMap.entrySet()) {
-            int checkLight = illuminatedBones.contains(entry.getKey()) ? ILLUMINATED_LIGHT : light;
-            for (PolyMesh m : entry.getValue()) {
-                if (!m.isVboReady(checkLight)) return false;
-            }
-        }
-        return true;
+        return fullyUploadedLights.contains(light);
     }
-
-    private static final int ILLUMINATED_LIGHT = 15728880; // LightTexture.pack(15,15)
 
     private void ensureAllUploaded(int light) {
-        // illuminated ボーンは actualLight=15728880 で drawVBO が呼ばれるため
-        // 通常ライトではなく 15728880 で VBO をベイクする必要がある
         for (Map.Entry<String, List<PolyMesh>> entry : meshMap.entrySet()) {
-            int bakeLight = isIlluminatedBone(entry.getKey()) ? ILLUMINATED_LIGHT : light;
+            int bakeLight = illuminatedBones.contains(entry.getKey()) ? 15728880 : light;
             for (PolyMesh m : entry.getValue()) m.ensureUploaded(bakeLight);
         }
+        fullyUploadedLights.add(light);
     }
 
-    /** ボーン名またはその祖先に _illuminated サフィックスがあるか判定する */
-    private boolean isIlluminatedBone(String boneName) {
-        return illuminatedBones.contains(boneName);
-    }
 
     /**
      * 全 PolyMesh の VBO キャッシュを破棄する。
@@ -164,6 +193,7 @@ public class PolyMeshModel {
         for (List<PolyMesh> meshes : meshMap.values()) {
             for (PolyMesh m : meshes) m.invalidateVboCache();
         }
+        fullyUploadedLights.clear();
     }
 
     // =========================================================================
@@ -181,18 +211,9 @@ public class PolyMeshModel {
     }
 
     private void renderBonesVBO(IPolyMeshBone bone, PoseStack ps, int light, boolean translucentPass) {
-        renderBonesVBO(bone, ps, light, translucentPass, false);
-    }
-
-    private void renderBonesVBO(IPolyMeshBone bone, PoseStack ps, int light, boolean translucentPass,
-                                 boolean parentIlluminated) {
         if (!bone.isVisible()) return;
         if (!meshAncestorBones.contains(bone.getName())) return;
-        // additional_magazine アニメーション中は magazine サブツリーを除外
         if (!excludedBones.isEmpty() && excludedBones.contains(bone.getName())) return;
-
-        // 祖先ボーンの illuminated を子へ伝播する
-        boolean illuminated = parentIlluminated || bone.isIlluminated();
 
         ps.pushPose();
         bone.applyTransform(ps);
@@ -201,7 +222,7 @@ public class PolyMeshModel {
         if (isTranslucent == translucentPass) {
             List<PolyMesh> meshes = meshMap.get(bone.getName());
             if (meshes != null) {
-                int actualLight = illuminated ? 15728880 : light;
+                int actualLight = (bone.isIlluminated() || illuminatedBones.contains(bone.getName())) ? 15728880 : light;
                 for (PolyMesh mesh : meshes) {
                     mesh.drawVBO(ps.last().pose(), actualLight);
                 }
@@ -209,7 +230,7 @@ public class PolyMeshModel {
         }
 
         for (IPolyMeshBone child : bone.getChildren()) {
-            renderBonesVBO(child, ps, light, translucentPass, illuminated);
+            renderBonesVBO(child, ps, light, translucentPass);
         }
 
         ps.popPose();
@@ -222,19 +243,9 @@ public class PolyMeshModel {
     private void renderBonesConsumer(IPolyMeshBone bone, PoseStack ps, VertexConsumer buf,
                                      int light, int overlay, float r, float g, float b, float a,
                                      boolean translucentPass) {
-        renderBonesConsumer(bone, ps, buf, light, overlay, r, g, b, a, translucentPass, false);
-    }
-
-    private void renderBonesConsumer(IPolyMeshBone bone, PoseStack ps, VertexConsumer buf,
-                                     int light, int overlay, float r, float g, float b, float a,
-                                     boolean translucentPass, boolean parentIlluminated) {
         if (!bone.isVisible()) return;
         if (!meshAncestorBones.contains(bone.getName())) return;
-        // additional_magazine アニメーション中は magazine サブツリーを除外
         if (!excludedBones.isEmpty() && excludedBones.contains(bone.getName())) return;
-
-        // 祖先ボーンの illuminated を子へ伝播する
-        boolean illuminated = parentIlluminated || bone.isIlluminated();
 
         ps.pushPose();
         bone.applyTransform(ps);
@@ -243,24 +254,17 @@ public class PolyMeshModel {
         if (isTranslucent == translucentPass) {
             List<PolyMesh> meshes = meshMap.get(bone.getName());
             if (meshes != null) {
-                int actualLight = illuminated ? 15728880 : light;
+                int actualLight = (bone.isIlluminated() || illuminatedBones.contains(bone.getName())) ? 15728880 : light;
                 for (PolyMesh mesh : meshes) mesh.compileConsumer(ps.last(), buf, actualLight, overlay, r, g, b, a);
             }
         }
         for (IPolyMeshBone child : bone.getChildren()) {
-            renderBonesConsumer(child, ps, buf, light, overlay, r, g, b, a, translucentPass, illuminated);
+            renderBonesConsumer(child, ps, buf, light, overlay, r, g, b, a, translucentPass);
         }
 
         ps.popPose();
     }
 
-    /**
-     * 指定したボーン名をルートとしてその配下のpoly_meshのみを描画する。
-     * additional_magazine の FunctionalRenderer から呼ばれ、
-     * magazine 系ボーンのpoly_meshを additional_magazine のtransform下で描画するために使う。
-     *
-     * @param rootBoneName このボーン配下のpoly_meshのみを描画する
-     */
     /** 指定ボーン配下を通常描画から除外する（additional_magazine アニメーション中に使用） */
     public void setExcludeSubtree(String rootBoneName) {
         if (rootBoneName.equals(excludeSubtreeRoot)) return;
@@ -268,6 +272,14 @@ public class PolyMeshModel {
         excludedBones.clear();
         IPolyMeshBone bone = findBone(this.root, rootBoneName);
         if (bone != null) collectSubtreeBones(bone, excludedBones);
+    }
+
+    public void addExcludeSubtree(String rootBoneName) {
+        IPolyMeshBone bone = findBone(this.root, rootBoneName);
+        if (bone != null) {
+            collectSubtreeBones(bone, excludedBones);
+            excludeSubtreeRoot = null;
+        }
     }
 
     public void clearExcludeSubtree() {
@@ -281,12 +293,33 @@ public class PolyMeshModel {
     }
 
     public void renderSubtree(String rootBoneName, PoseStack ps, MultiBufferSource buf,
-                               ResourceLocation tex, int light, int overlay, boolean useVBO) {
+                              ResourceLocation tex, int light, int overlay, boolean useVBO) {
         IPolyMeshBone targetBone = findBone(this.root, rootBoneName);
         if (targetBone == null) return;
-
         VertexConsumer vc = buf.getBuffer(RenderType.entityCutoutNoCull(tex));
-        renderBonesConsumer(targetBone, ps, vc, light, overlay, 1f, 1f, 1f, 1f, false, false);
+        renderBonesConsumer(targetBone, ps, vc, light, overlay, 1f, 1f, 1f, 1f, false);
+    }
+
+    /**
+     * additional_magazine の FunctionalRenderer から直接呼ぶ版。
+     * TacZ が用意した VertexConsumer にそのまま書き込むため
+     * MultiBufferSource / endBatch / turnOnLightLayer は一切不要。
+     *
+     * @param vertexConsumer TacZ の IFunctionalRenderer が渡す VertexConsumer
+     */
+    public void renderSubtreeDirect(String rootBoneName, PoseStack ps,
+                                    VertexConsumer vertexConsumer, int light, int overlay) {
+        IPolyMeshBone targetBone = findBone(this.root, rootBoneName);
+        if (targetBone == null) return;
+        renderBonesConsumer(targetBone, ps, vertexConsumer, light, overlay, 1f, 1f, 1f, 1f, false);
+    }
+
+    public void renderBonesStencilOnly(String rootBoneName, PoseStack ps, MultiBufferSource buf,
+                                       ResourceLocation tex, int light, int overlay) {
+        IPolyMeshBone bone = findBone(this.root, rootBoneName);
+        if (bone == null) return;
+        VertexConsumer vc = buf.getBuffer(RenderType.entityCutoutNoCull(tex));
+        renderBonesConsumer(bone, ps, vc, light, overlay, 0f, 0f, 0f, 0f, false);
     }
 
     /** ボーン名でツリーを検索する */
@@ -299,7 +332,6 @@ public class PolyMeshModel {
         return null;
     }
 
-    /** magazine系ボーン名かどうか判定（additional_magazine下で描画すべきボーン） */
     public boolean hasMeshInSubtree(String boneName) {
         IPolyMeshBone bone = findBone(this.root, boneName);
         if (bone == null) return false;

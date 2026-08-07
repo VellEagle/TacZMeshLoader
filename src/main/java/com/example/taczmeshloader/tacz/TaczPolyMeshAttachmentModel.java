@@ -4,6 +4,7 @@ import com.example.taczmeshloader.core.PolyMeshModel;
 import com.example.taczmeshloader.api.IPolyMeshBone;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.tacz.guns.api.TimelessAPI;
 import com.tacz.guns.api.item.IAttachment;
@@ -20,10 +21,13 @@ import net.minecraft.world.item.ItemDisplayContext;
 import net.minecraft.world.item.ItemStack;
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.api.distmarker.OnlyIn;
+import org.lwjgl.opengl.GL11;
 
 import javax.annotation.Nullable;
 import java.io.InputStreamReader;
 import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -35,11 +39,97 @@ public class TaczPolyMeshAttachmentModel extends BedrockAttachmentModel {
     private ResourceLocation cachedTexture = null;
     private List<IPolyMeshBone> cachedRootChildren = null;
 
+    private final Set<String> ocularPolyMeshBoneNames = new HashSet<>();
+
+    private static final java.lang.reflect.Field SCOPE_VIEW_RADIUS_FIELD;
+    static {
+        java.lang.reflect.Field f = null;
+        try {
+            f = BedrockAttachmentModel.class.getDeclaredField("scopeViewRadiusModifier");
+            f.setAccessible(true);
+        } catch (NoSuchFieldException ignored) {}
+        SCOPE_VIEW_RADIUS_FIELD = f;
+    }
+
+    private float getScopeViewRadiusModifier() {
+        if (SCOPE_VIEW_RADIUS_FIELD != null) {
+            try { return SCOPE_VIEW_RADIUS_FIELD.getFloat(this); }
+            catch (IllegalAccessException ignored) {}
+        }
+        return 1.0f;
+    }
+
     private static final org.apache.logging.log4j.Logger MESH_LOG =
             org.apache.logging.log4j.LogManager.getLogger("MeshyLoader");
 
     public TaczPolyMeshAttachmentModel(BedrockModelPOJO pojo, BedrockVersion version) {
         super(pojo, version);
+    }
+
+    // =========================================================================
+    // visibility 復元
+    // =========================================================================
+
+    private void restorePartVisibilityForPolyMesh() {
+        Set<BedrockPart> divisionLeaves = new HashSet<>();
+        if (divisionNodePaths != null) {
+            for (List<BedrockPart> path : divisionNodePaths) {
+                if (path != null && !path.isEmpty()) divisionLeaves.add(path.get(path.size() - 1));
+            }
+        }
+        restorePathLeaf(scopeBodyPath, divisionLeaves);
+        restorePathLeaf(ocularRingPath, divisionLeaves);
+        if (ocularNodePaths != null) {
+            for (List<BedrockPart> path : ocularNodePaths) restorePathLeaf(path, divisionLeaves);
+        }
+    }
+
+    private static void restorePathLeaf(@Nullable List<BedrockPart> path, Set<BedrockPart> excluded) {
+        if (path == null || path.isEmpty()) return;
+        BedrockPart leaf = path.get(path.size() - 1);
+        if (!excluded.contains(leaf)) leaf.visible = true;
+    }
+
+    /**
+     * scope/sight 一人称時の PolyMesh 描画。ステンシルバッファの残留値を利用して穴描画。
+     */
+    private void renderPolyMeshThroughStencilHole(
+            PoseStack poseStack,
+            MultiBufferSource.BufferSource bufferSource,
+            ResourceLocation tex,
+            int light, int overlay, boolean useVBO) {
+
+        com.tacz.guns.util.RenderHelper.enableItemEntityStencilTest();
+        RenderSystem.stencilFunc(GL11.GL_EQUAL, 0, 0xFF);
+        RenderSystem.stencilOp(GL11.GL_KEEP, GL11.GL_KEEP, GL11.GL_KEEP);
+
+        polyMeshModel.renderCutoutOnly(poseStack, bufferSource, tex, light, overlay, useVBO);
+        bufferSource.endBatch(RenderType.entityCutoutNoCull(tex));
+        bufferSource.endBatch(RenderType.entityCutout(tex));
+
+        if (polyMeshModel.hasTranslucentMeshes()) {
+            polyMeshModel.renderTranslucentOnly(poseStack, bufferSource, tex, light, overlay, useVBO);
+            bufferSource.endBatch(RenderType.entityTranslucentCull(tex));
+        }
+
+        RenderSystem.stencilFunc(GL11.GL_ALWAYS, 0, 0xFF);
+        com.tacz.guns.util.RenderHelper.disableItemEntityStencilTest();
+    }
+
+    /**
+     * 非 scope/sight 時（通常描画）の PolyMesh 描画。
+     */
+
+    private void renderPolyMeshNormalAttachment(
+            PoseStack poseStack,
+            MultiBufferSource.BufferSource bufferSource,
+            ResourceLocation tex,
+            int light, int overlay, boolean useVBO) {
+
+        polyMeshModel.renderCutoutOnly(poseStack, bufferSource, tex, light, overlay, useVBO);
+        if (polyMeshModel.hasTranslucentMeshes()) {
+            polyMeshModel.renderTranslucentOnly(poseStack, bufferSource, tex, light, overlay, useVBO);
+        }
     }
 
     @Override
@@ -79,144 +169,41 @@ public class TaczPolyMeshAttachmentModel extends BedrockAttachmentModel {
         int safeOverlay = overlay;
 
         boolean isStandalone = (currentGunItem == null || currentGunItem.isEmpty());
-        boolean useVBO = true; // 全コンテキストでVBOを使用
+
+        // インベントリのプレイヤープレビュー（ドール表示）など、GUI 画面が開いている
+        // 状態では VBO 直接描画が正しく表示されないことが実機で確認されているため、
+        // その場合は VBO を無効化する。
+        final boolean isGuiLike = com.example.taczmeshloader.render.ScreenRenderTracker.isRenderingScreen();
+        final boolean useVBO = !isGuiLike;
+        final boolean isFirstPersonScopeOrSight = transformType.firstPerson() && isScope();
 
         Minecraft mc2 = Minecraft.getInstance();
         MultiBufferSource.BufferSource bufferSource = mc2.renderBuffers().bufferSource();
 
-        // ========== キューブ + メッシュ混在対応 ==========
-        //
-        // 銃本体と同じ設計方針:
-        //   super.render() がキューブ・ステンシル・ARCompat処理を全て担当し、
-        //   PolyMesh はその後に描画する。
-        //
-        // cubes の消去は一切行わない。
-        // poly_mesh のみのボーンは geo.json 上で cubes が元々空。
-        // 混在ボーンは TacZ がキューブを、PolyMesh がメッシュをそれぞれ描画する。
-        //
-        // sight/scope の場合:
-        //   BedrockAttachmentModel.render() 末尾で super.render()（BedrockModel.render()）が
-        //   呼ばれる時点でステンシル処理は全て完結している。
-        //   ARCompat 加速時も TaczPolyMeshGunModel と同様に -943+3/-943+4 レイヤーで対処する。
-        // =================================================
-
-        if (com.tacz.guns.compat.ar.ARCompat.shouldAccelerate()
-                && transformType.firstPerson()
-                && (isScope() || isSight())) {
-
-            // 加速パス（sight/scope + 一人称 + ARCompat）
-            // TacZ の使う最終レイヤーは -943+2 なので、+3 はその後に処理される。
+        // ---------- AR (Accelerated Rendering) との関わり方 ----------
+        // TaczPolyMeshGunModel と同じ方針・同じ理由。AR のレイヤー機構経由で
+        // 部分的に協調させようとすることに起因する不具合の再発を避けるため、
+        // AR が有効な場合はこのアタッチメントの描画全体を AR の介入対象から
+        // 完全に外す（一時的に無効化してから、AR 未導入時と同じコードパスで
+        // 描画する）。
+        final boolean shouldRestoreAcceleration = com.tacz.guns.compat.ar.ARCompat.shouldAccelerate();
+        if (shouldRestoreAcceleration) {
+            com.tacz.guns.compat.ar.ARCompat.disableAcceleration();
+        }
+        try {
             super.render(attachmentItem, currentGunItem, poseStack, transformType, renderType, light, overlay);
+            restorePartVisibilityForPolyMesh();
 
-            final int safeLightF  = safeLight;
-            final int safeOverlayF = safeOverlay;
-            final ResourceLocation texF = cachedTexture;
-            final boolean hasTrans = this.polyMeshModel.hasTranslucentMeshes();
-            final boolean standaloneF = isStandalone;
-
-            PoseStack snapPose = new PoseStack();
-            snapPose.last().pose().set(poseStack.last().pose());
-            snapPose.last().normal().set(poseStack.last().normal());
-
-            com.tacz.guns.compat.ar.ARCompat.setRenderLayer(-943 + 3);
-            com.tacz.guns.compat.ar.ARCompat.setRenderBeforeFunction(() -> {
-                com.tacz.guns.compat.ar.ARCompat.disableAcceleration();
-
-                int vao = org.lwjgl.opengl.GL11.glGetInteger(org.lwjgl.opengl.GL30.GL_VERTEX_ARRAY_BINDING);
-                com.mojang.blaze3d.vertex.BufferUploader.invalidate();
-
+            if (!isGuiLike) {
                 mc2.gameRenderer.lightTexture().turnOnLightLayer();
-
-                snapPose.pushPose();
-                this.polyMeshModel.renderCutoutOnly(snapPose, bufferSource, texF, safeLightF, safeOverlayF, useVBO);
-                if (hasTrans) {
-                    this.polyMeshModel.renderTranslucentOnly(snapPose, bufferSource, texF, safeLightF, safeOverlayF, useVBO);
-                }
-                snapPose.popPose();
-
-                if (!com.tacz.guns.compat.oculus.OculusCompat.endBatch(bufferSource)) {
-                    bufferSource.endBatch(RenderType.entityCutoutNoCull(texF));
-                    bufferSource.endBatch(RenderType.entityCutout(texF));
-                    if (hasTrans) {
-                        bufferSource.endBatch(RenderType.entityTranslucentCull(texF));
-                    }
-                }
-
-                mc2.gameRenderer.lightTexture().turnOffLightLayer();
-
-                org.lwjgl.opengl.GL30.glBindVertexArray(vao);
-                com.tacz.guns.compat.ar.ARCompat.resetAcceleration();
-            });
-
-            // -943+3 レイヤーを ARCompat に認識させるトリガー
-            super.render(poseStack, transformType, renderType, light, overlay);
-
-            com.tacz.guns.compat.ar.ARCompat.resetRenderLayer();
-            com.tacz.guns.compat.ar.ARCompat.resetRenderBeforeFunction();
-
-        } else if (com.tacz.guns.compat.ar.ARCompat.shouldAccelerate()) {
-
-            // 加速パス（sight/scope 以外）
-            // TaczPolyMeshGunModel と同じ -943+4 パターン
-            super.render(attachmentItem, currentGunItem, poseStack, transformType, renderType, light, overlay);
-
-            final int safeLightF  = safeLight;
-            final int safeOverlayF = safeOverlay;
-            final ResourceLocation texF = cachedTexture;
-            final boolean hasTrans = this.polyMeshModel.hasTranslucentMeshes();
-
-            PoseStack snapPose = new PoseStack();
-            snapPose.last().pose().set(poseStack.last().pose());
-            snapPose.last().normal().set(poseStack.last().normal());
-
-            com.tacz.guns.compat.ar.ARCompat.setRenderLayer(-943 + 4);
-            com.tacz.guns.compat.ar.ARCompat.setRenderBeforeFunction(() -> {
-                com.tacz.guns.compat.ar.ARCompat.disableAcceleration();
-
-                int vao = org.lwjgl.opengl.GL11.glGetInteger(org.lwjgl.opengl.GL30.GL_VERTEX_ARRAY_BINDING);
-                com.mojang.blaze3d.vertex.BufferUploader.invalidate();
-
-                mc2.gameRenderer.lightTexture().turnOnLightLayer();
-
-                snapPose.pushPose();
-                this.polyMeshModel.renderCutoutOnly(snapPose, bufferSource, texF, safeLightF, safeOverlayF, useVBO);
-                if (hasTrans) {
-                    this.polyMeshModel.renderTranslucentOnly(snapPose, bufferSource, texF, safeLightF, safeOverlayF, useVBO);
-                }
-                snapPose.popPose();
-
-                if (!com.tacz.guns.compat.oculus.OculusCompat.endBatch(bufferSource)) {
-                    bufferSource.endBatch(RenderType.entityCutoutNoCull(texF));
-                    bufferSource.endBatch(RenderType.entityCutout(texF));
-                    if (hasTrans) {
-                        bufferSource.endBatch(RenderType.entityTranslucentCull(texF));
-                    }
-                }
-
-                mc2.gameRenderer.lightTexture().turnOffLightLayer();
-
-                org.lwjgl.opengl.GL30.glBindVertexArray(vao);
-                com.tacz.guns.compat.ar.ARCompat.resetAcceleration();
-            });
-
-            super.render(poseStack, transformType, renderType, light, overlay);
-
-            com.tacz.guns.compat.ar.ARCompat.resetRenderLayer();
-            com.tacz.guns.compat.ar.ARCompat.resetRenderBeforeFunction();
-
-        } else {
-
-            // 非加速パス
-            // super.render() 完了後はステンシル無効化済みなので安全に endBatch できる
-            super.render(attachmentItem, currentGunItem, poseStack, transformType, renderType, light, overlay);
-
-            mc2.gameRenderer.lightTexture().turnOnLightLayer();
-
-            this.polyMeshModel.renderCutoutOnly(poseStack, bufferSource, cachedTexture, safeLight, safeOverlay, useVBO);
-            boolean hasTrans = this.polyMeshModel.hasTranslucentMeshes();
-            if (hasTrans) {
-                this.polyMeshModel.renderTranslucentOnly(poseStack, bufferSource, cachedTexture, safeLight, safeOverlay, useVBO);
             }
+
+            if (isFirstPersonScopeOrSight) {
+                renderPolyMeshThroughStencilHole(poseStack, bufferSource, cachedTexture, light, overlay, useVBO);
+            } else {
+                renderPolyMeshNormalAttachment(poseStack, bufferSource, cachedTexture, light, overlay, useVBO);
+            }
+            boolean hasTrans = this.polyMeshModel.hasTranslucentMeshes();
 
             if (!com.tacz.guns.compat.oculus.OculusCompat.endBatch(bufferSource)) {
                 bufferSource.endBatch(RenderType.entityCutoutNoCull(cachedTexture));
@@ -230,9 +217,16 @@ public class TaczPolyMeshAttachmentModel extends BedrockAttachmentModel {
                 }
             }
 
-            mc2.gameRenderer.lightTexture().turnOffLightLayer();
+            if (!isGuiLike) {
+                mc2.gameRenderer.lightTexture().turnOffLightLayer();
+            }
+        } finally {
+            if (shouldRestoreAcceleration) {
+                com.tacz.guns.compat.ar.ARCompat.resetAcceleration();
+            }
         }
     }
+
 
     /**
      * geo.json を読み込み、poly_mesh ボーンを PolyMeshModel に登録する。
@@ -277,10 +271,21 @@ public class TaczPolyMeshAttachmentModel extends BedrockAttachmentModel {
                 this.cachedTexture = null;
                 this.cachedRootChildren = null;
 
-                // シェーダー切り替え時に VBO キャッシュを無効化するため登録する
                 com.example.taczmeshloader.render.ShaderStateTracker.register(this.polyMeshModel);
 
-                MESH_LOG.info("[MeshyLoader] Loaded attachment poly_mesh from: {}", modelLocation);
+                ocularPolyMeshBoneNames.clear();
+                if (ocularNodePaths != null) {
+                    for (List<BedrockPart> path : ocularNodePaths) {
+                        if (path == null || path.isEmpty()) continue;
+                        BedrockPart leaf = path.get(path.size() - 1);
+                        if (leaf.name != null && polyMeshModel.hasMeshInSubtree(leaf.name)) {
+                            ocularPolyMeshBoneNames.add(leaf.name);
+                        }
+                    }
+                }
+
+                MESH_LOG.info("[MeshyLoader] Loaded attachment poly_mesh from: {} (ocularPolyMeshBones={})",
+                        modelLocation, ocularPolyMeshBoneNames);
             }
         } catch (Exception e) {
             MESH_LOG.error("[MeshyDebug][loadPolyMesh] FAILED: location={}", modelLocation, e);
@@ -303,7 +308,7 @@ public class TaczPolyMeshAttachmentModel extends BedrockAttachmentModel {
         @Override public float getScaleX()       { return part.xScale == 0 ? 1f : part.xScale; }
         @Override public float getScaleY()       { return part.yScale == 0 ? 1f : part.yScale; }
         @Override public float getScaleZ()       { return part.zScale == 0 ? 1f : part.zScale; }
-        @Override public boolean isVisible()     { return part.visible; }
+        @Override public boolean isVisible()     { return true; }
         @Override public boolean isIlluminated() { return part.illuminated; }
         @Override
         public List<? extends IPolyMeshBone> getChildren() {

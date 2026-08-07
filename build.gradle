@@ -140,6 +140,8 @@ dependencies {
 
     // TacZ 依存（compileOnly: ビルド時参照のみ、実行時は別途導入）
     implementation fg.deobf("curse.maven:timeless-and-classics-zero-1028108:8055552")
+
+    implementation fg.deobf("curse.maven:accelerated-rendering-1314021:8448250")
     // Mixin annotation processor
     annotationProcessor 'org.spongepowered:mixin:0.8.5:processor'
 }

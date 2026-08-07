@@ -52,5 +52,8 @@ public class TaczMeshyIntegration {
      */
     public static void onClientSetup(FMLClientSetupEvent event) {
         event.enqueueWork(TaczPolyMeshGunModel::register);
+        // MeshyLoader 独自の Accelerated Rendering 対応の初期化。
+        // TacZ 本体の ARCompat::init と同じタイミング（FMLClientSetupEvent）で呼ぶ。
+        event.enqueueWork(com.example.taczmeshloader.compat.ar.ARCompat::init);
     }
 }

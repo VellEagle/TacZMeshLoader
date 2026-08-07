@@ -1,4 +1,4 @@
-package com.example.taczmeshloader.lrtactical;
+package com.example.taczmeshloader.tacz;
 
 import com.example.taczmeshloader.api.IPolyMeshBone;
 import com.example.taczmeshloader.core.PolyMeshModel;
@@ -7,10 +7,10 @@ import com.example.taczmeshloader.render.ShaderStateTracker;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.mojang.blaze3d.vertex.PoseStack;
+import com.tacz.guns.client.model.bedrock.BedrockModel;
 import com.tacz.guns.client.model.bedrock.BedrockPart;
 import com.tacz.guns.client.resource.pojo.model.BedrockModelPOJO;
 import com.tacz.guns.client.resource.pojo.model.BedrockVersion;
-import me.xjqsh.lrtactical.client.renderer.model.CustomBedrockModel;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.RenderType;
@@ -25,16 +25,17 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 /**
- * LesRaisins Tactical Equipements 用の poly_mesh 対応モデルクラス。
+ * TacZ の {@link BedrockModel} に poly_mesh レイヤーを追加したサブクラス。
  *
- * <p>{@link CustomBedrockModel} のサブクラスであるため、poly_mesh を使わない
- * 通常の cubeモデルでも完全に同じ動作をする。
- * {@link } が {@code @Redirect} で
- * {@code new CustomBedrockModel(...)} をこのクラスに差し替えることで、
- * AnimationController が最初からこのインスタンスに紐づく。</p>
+ * <p>block (GunSmithTable など) の表示に使用する。
+ * poly_mesh の geo.json がない場合は親クラスと全く同じ動作をする。</p>
+ *
+ * <h3>使用方法</h3>
+ * {@link } が {@code checkModel} の末尾に介入し、
+ * このクラスのインスタンスに差し替える。
  */
 @OnlyIn(Dist.CLIENT)
-public class LrPolyMeshModel extends CustomBedrockModel {
+public class TaczPolyMeshBlockModel extends BedrockModel {
 
     private PolyMeshModel polyMeshModel;
     private ResourceLocation texture;
@@ -43,45 +44,56 @@ public class LrPolyMeshModel extends CustomBedrockModel {
     private static final org.apache.logging.log4j.Logger MESH_LOG =
             org.apache.logging.log4j.LogManager.getLogger("MeshyLoader");
 
-    public LrPolyMeshModel(BedrockModelPOJO pojo, BedrockVersion version) {
+    public TaczPolyMeshBlockModel(BedrockModelPOJO pojo, BedrockVersion version) {
         super(pojo, version);
     }
 
-    // -------------------------------------------------------------------------
-    // レンダリング
-    // -------------------------------------------------------------------------
+    // =========================================================================
+    // render() オーバーライド
+    // =========================================================================
 
     @Override
-    public void render(PoseStack poseStack,
-                       ItemDisplayContext transformType,
-                       RenderType renderType,
-                       int light, int overlay) {
+    public void render(PoseStack poseStack, ItemDisplayContext transformType,
+                       RenderType renderType, int light, int overlay) {
+        // キューブレイヤーを通常通り描画
         super.render(poseStack, transformType, renderType, light, overlay);
+
+        // poly_mesh レイヤーを追加描画
         renderPolyMeshLayer(poseStack, transformType, light, overlay);
     }
 
-    private void renderPolyMeshLayer(PoseStack poseStack, ItemDisplayContext ctx,
-                                     int light, int overlay) {
+    @Override
+    public void render(PoseStack poseStack, ItemDisplayContext transformType,
+                       RenderType renderType, int light, int overlay,
+                       float red, float green, float blue, float alpha) {
+        super.render(poseStack, transformType, renderType, light, overlay, red, green, blue, alpha);
+        renderPolyMeshLayer(poseStack, transformType, light, overlay);
+    }
+
+    private void renderPolyMeshLayer(PoseStack poseStack, ItemDisplayContext transformType, int light, int overlay) {
         if (polyMeshModel == null || texture == null) return;
 
         Minecraft mc = Minecraft.getInstance();
         MultiBufferSource.BufferSource bufferSource = mc.renderBuffers().bufferSource();
 
-        // GUI・HEAD などのアイコン/2D表示コンテキストでは、VBO 直接描画が
-        // GUI のフレームバッファーに正しく書き込めずアイコンが透明になるため VBO を使わない。
-        final boolean isIconContext = ctx == ItemDisplayContext.GUI
-                || ctx == ItemDisplayContext.HEAD
-                || ctx == ItemDisplayContext.FIXED
-                || ctx == ItemDisplayContext.NONE;
+        // GUI・HEAD などのアイコン/2D表示コンテキストでは VBO を使わない。
+        // VBO は OpenGL 直接描画のため、GUIのフレームバッファーに正しく書き込めず
+        // アイコンが透明になる問題が発生する。
+        // VBO が有効になるのは一人称・三人称・地面ドロップなど3D空間のみ。
+        final boolean isIconContext = transformType == ItemDisplayContext.GUI
+                || transformType == ItemDisplayContext.HEAD
+                || transformType == ItemDisplayContext.FIXED
+                || transformType == ItemDisplayContext.NONE;
         final boolean useVBO = !isIconContext;
 
-        // インベントリのプレイヤープレビュー（近接武器等を手に持って表示する
-        // ケースを含む）など、GUI 画面が開いている状態で lightTexture の
-        // 有効/無効化を毎フレーム行うと重い処理になり、メニューを開いている間
-        // FPS が大幅に低下することが分かっているため、画面が開いている間は
-        // この操作をスキップする（VBO 自体は無効化しない）。
+        // インベントリのプレイヤープレビュー（ドール表示）など、GUI 画面が開いている
+        // 状態で lightTexture の有効/無効化を毎フレーム行うと重い処理になり、
+        // メニューを開いている間 FPS が大幅に低下することが分かっているため、
+        // 画面が開いている間はこの操作をスキップする（VBO 自体は無効化しない）。
         final boolean isGuiLike = isIconContext || com.example.taczmeshloader.render.ScreenRenderTracker.isRenderingScreen();
 
+        // GUIコンテキストではlightTextureの操作をスキップする
+        // (GUIレンダリング中にlightTextureを操作するとレンダリング状態が壊れる)
         if (!isGuiLike) {
             mc.gameRenderer.lightTexture().turnOnLightLayer();
         }
@@ -108,39 +120,21 @@ public class LrPolyMeshModel extends CustomBedrockModel {
         }
     }
 
-    // -------------------------------------------------------------------------
-    // poly_mesh ロード
-    // -------------------------------------------------------------------------
+    // =========================================================================
+    // loadPolyMesh
+    // =========================================================================
 
     /**
-     * geo_models/ に対応する poly_mesh JSON が存在すればロードする静的ヘルパー。
-     * Mixin（= Mixinパッケージ外から呼べない制約あり）ではなく
-     * このクラス自身のメソッドとして定義することで、Mixin から安全に呼べる。
+     * geo.json を読み込んで poly_mesh ボーンを登録する。
      *
-     * @param model         差し替え済みの LrPolyMeshModel インスタンス
-     * @param modelLocation display JSON の "model" フィールド値
-     * @param texture       解決済みテクスチャ ResourceLocation（textures/〜.png 形式）
+     * @param modelLocation   geo.json の ResourceLocation
+     * @param textureLocation このモデルで使用するテクスチャ
      */
-    public static void tryLoadPolyMesh(LrPolyMeshModel model,
-                                       ResourceLocation modelLocation,
-                                       ResourceLocation texture) {
-        if (modelLocation == null) return;
-
-        ResourceLocation geoPath = new ResourceLocation(
-                modelLocation.getNamespace(),
-                "geo_models/" + modelLocation.getPath() + ".json"
-        );
-
-        // poly_mesh JSON が存在する場合のみロード（なければ通常の cubeモデルとして動作）
-        if (Minecraft.getInstance().getResourceManager().getResource(geoPath).isEmpty()) return;
-
-        model.loadPolyMesh(geoPath, texture);
-    }
-
-    public void loadPolyMesh(ResourceLocation modelLocation, ResourceLocation texture) {
-        this.texture = texture;
+    public void loadPolyMesh(ResourceLocation modelLocation, ResourceLocation textureLocation) {
         try {
-            if (this.polyMeshModel != null) this.polyMeshModel.close();
+            if (this.polyMeshModel != null) {
+                this.polyMeshModel.close();
+            }
 
             var resource = Minecraft.getInstance().getResourceManager()
                     .getResource(modelLocation).orElseThrow();
@@ -162,29 +156,39 @@ public class LrPolyMeshModel extends CustomBedrockModel {
                     public List<? extends IPolyMeshBone> getChildren() {
                         if (cachedRootChildren != null) return cachedRootChildren;
                         cachedRootChildren = getShouldRender().stream()
-                                .map(LrPartAdapter::new).collect(Collectors.toList());
+                                .map(TaczPartAdapter::new)
+                                .collect(Collectors.toList());
                         return cachedRootChildren;
                     }
                 };
 
                 this.polyMeshModel = new PolyMeshModel(adaptedRoot, rawJson);
+                this.texture = textureLocation;
                 this.cachedRootChildren = null;
+
                 ShaderStateTracker.register(this.polyMeshModel);
-                MESH_LOG.info("[MeshyLoader] Loaded LR poly_mesh from: {}", modelLocation);
+
+                MESH_LOG.info("[MeshyLoader] Loaded block poly_mesh from: {}", modelLocation);
             }
         } catch (Exception e) {
-            MESH_LOG.error("[MeshyDebug][LrPolyMeshModel] FAILED: location={}", modelLocation, e);
+            MESH_LOG.error("[MeshyLoader] Failed to load block poly_mesh: {}", modelLocation, e);
         }
     }
 
-    // -------------------------------------------------------------------------
-    // BedrockPart → IPolyMeshBone アダプター
-    // -------------------------------------------------------------------------
+    public boolean hasPolyMesh() {
+        return polyMeshModel != null;
+    }
 
-    private static class LrPartAdapter implements IPolyMeshBone {
+    // =========================================================================
+    // TaczPartAdapter
+    // =========================================================================
+
+    private static class TaczPartAdapter implements IPolyMeshBone {
         private final BedrockPart part;
         private List<IPolyMeshBone> cachedChildren;
-        LrPartAdapter(BedrockPart part) { this.part = part; }
+
+        TaczPartAdapter(BedrockPart part) { this.part = part; }
+
         @Override public String getName()        { return part.name == null ? "" : part.name; }
         @Override public float getPivotX()       { return part.x; }
         @Override public float getPivotY()       { return part.y; }
@@ -197,14 +201,19 @@ public class LrPolyMeshModel extends CustomBedrockModel {
         @Override public float getScaleZ()       { return part.zScale == 0 ? 1f : part.zScale; }
         @Override public boolean isVisible()     { return part.visible; }
         @Override public boolean isIlluminated() { return part.illuminated; }
+
         @Override
         public List<? extends IPolyMeshBone> getChildren() {
             if (cachedChildren != null) return cachedChildren;
             cachedChildren = new ArrayList<>();
-            if (part.children != null)
-                for (BedrockPart c : part.children) cachedChildren.add(new LrPartAdapter(c));
+            if (part.children != null) {
+                for (BedrockPart c : part.children) {
+                    cachedChildren.add(new TaczPartAdapter(c));
+                }
+            }
             return cachedChildren;
         }
+
         @Override public void applyTransform(PoseStack ps) { part.translateAndRotateAndScale(ps); }
     }
 }

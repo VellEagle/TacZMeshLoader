@@ -114,8 +114,13 @@ public class PolyMesh {
     // VBO 管理
     // =========================================================================
 
+    private static final org.apache.logging.log4j.Logger MESH_PERF_LOG =
+            org.apache.logging.log4j.LogManager.getLogger("MeshyLoaderPerf");
+
     public void ensureUploaded(int packedLight) {
         if (vertexCount == 0 || vboCache.containsKey(packedLight)) return;
+
+        long t0 = System.nanoTime();
 
         VertexBuffer vertexBuffer = new VertexBuffer(VertexBuffer.Usage.STATIC);
 
@@ -137,6 +142,11 @@ public class PolyMesh {
         VertexBuffer.unbind();
 
         vboCache.put(packedLight, vertexBuffer);
+
+        double ms = (System.nanoTime() - t0) / 1_000_000.0;
+        MESH_PERF_LOG.info("[MeshyPerf] VBO upload: light={} vertexCount={} cacheSizeAfter={} tookMs={} screenOpen={}",
+                packedLight, vertexCount, vboCache.size(), String.format("%.3f", ms),
+                net.minecraft.client.Minecraft.getInstance().screen != null);
     }
 
     public void drawVBO(Matrix4f posePose, int packedLight) {
@@ -160,10 +170,15 @@ public class PolyMesh {
      * キャッシュを破棄して次フレームで再アップロードさせることで解決する。
      */
     public void invalidateVboCache() {
+        int hadEntries = vboCache.size();
         for (VertexBuffer vbo : vboCache.values()) {
             if (vbo != null) vbo.close();
         }
         vboCache.clear();
+        if (hadEntries > 0) {
+            MESH_PERF_LOG.info("[MeshyPerf] VBO cache invalidated: entriesCleared={} screenOpen={}",
+                    hadEntries, net.minecraft.client.Minecraft.getInstance().screen != null);
+        }
     }
 
     public void close() {

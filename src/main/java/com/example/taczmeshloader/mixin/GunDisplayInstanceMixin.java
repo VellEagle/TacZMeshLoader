@@ -89,7 +89,6 @@ public class GunDisplayInstanceMixin {
         TaczPolyMeshGunModel polyLodModel = new TaczPolyMeshGunModel(modelPOJO, version);
         polyLodModel.loadPolyMesh(geoPath);
         // LOD専用テクスチャを固定（display.getModelTexture()ではなくlod.textureを使う）
-        polyLodModel.setOverrideTexture(gunLod.getModelTexture());
 
         // lodModel フィールドを差し替え（テクスチャは既存のものを引き継ぐ）
         try {
