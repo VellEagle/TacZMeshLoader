@@ -42,11 +42,22 @@ public class PolyMesh {
         protected boolean removeEldestEntry(Map.Entry<Integer, VertexBuffer> eldest) {
             if (size() > 8) {
                 if (eldest.getValue() != null) eldest.getValue().close();
+                // 破棄したことを PolyMeshModel に知らせる（知らせないと、PolyMeshModel は
+                // このライト値を「アップロード済み」と思い込んだまま VBO 描画を選び、
+                // drawVBO() が空振りしてメッシュが消える）
+                if (evictionListener != null) evictionListener.accept(eldest.getKey());
                 return true;
             }
             return false;
         }
     };
+
+    /** LRU により VBO が破棄されたときに、そのライト値を受け取るリスナー（PolyMeshModel が登録） */
+    private java.util.function.IntConsumer evictionListener = null;
+
+    public void setEvictionListener(java.util.function.IntConsumer listener) {
+        this.evictionListener = listener;
+    }
 
     // ---- フォールバック用ベイク済み配列 ----
     private final float[] bakedX, bakedY, bakedZ;

@@ -55,5 +55,38 @@ public class TaczMeshyIntegration {
         // MeshyLoader 独自の Accelerated Rendering 対応の初期化。
         // TacZ 本体の ARCompat::init と同じタイミング（FMLClientSetupEvent）で呼ぶ。
         event.enqueueWork(com.example.taczmeshloader.compat.ar.ARCompat::init);
+        // ModernFix 互換（mixin.perf.clear_mixin_classinfo 対策）
+        event.enqueueWork(TaczMeshyIntegration::preloadLateMixinTargets);
+    }
+
+    /**
+     * Mixin の対象クラスのうち、TacZ がワールド参加時まで読み込まないクラスを、
+     * 起動処理中にレンダースレッド上で先に読み込んでおく。
+     *
+     * <p>ModernFix の {@code mixin.perf.clear_mixin_classinfo} を有効にしていると、
+     * タイトル画面の表示直後に、まだ読み込まれていない Mixin 対象クラスが
+     * バックグラウンドスレッドでまとめて強制的に読み込まれる。
+     * BedrockAttachmentModel（BedrockAttachmentModelMixin の対象）はワールド参加時まで
+     * 読み込まれないため、このタイミングで別スレッドから読み込まれてしまい、
+     * 環境によってはタイトル画面でクラッシュ／フリーズする原因になっていた。</p>
+     *
+     * <p>ここで先に読み込んでおけば、ModernFix の処理時点では既に Mixin 適用済みなので
+     * 強制読み込みの対象から外れる。ModernFix が無い環境でも、本来ワールド参加時に
+     * 行われる読み込みが少し早まるだけで、動作には影響しない。</p>
+     */
+    private static void preloadLateMixinTargets() {
+        final String[] targets = {
+                "com.tacz.guns.client.model.BedrockAttachmentModel",
+        };
+        for (String name : targets) {
+            try {
+                Class.forName(name, true, TaczMeshyIntegration.class.getClassLoader());
+                org.apache.logging.log4j.LogManager.getLogger("MeshyLoader")
+                        .info("[TacZMeshLoader] Preloaded mixin target: {}", name);
+            } catch (Throwable t) {
+                org.apache.logging.log4j.LogManager.getLogger("MeshyLoader")
+                        .warn("[TacZMeshLoader] Failed to preload mixin target: {}", name, t);
+            }
+        }
     }
 }
