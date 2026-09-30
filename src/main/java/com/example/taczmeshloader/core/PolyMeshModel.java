@@ -20,12 +20,41 @@ public class PolyMeshModel {
     private final Set<String> translucentBones = new HashSet<>();
     private final boolean hasTranslucent;
     private final Set<String> meshAncestorBones = new HashSet<>();
+
+    /**
+     * 「このライト値については既に meshMap の全ボーンをアップロード済み」を
+     * 記録する集合。allVboReady() をボーンツリーの走査無しで O(1) 判定できる
+     * ようにするためのもの（詳細は allVboReady/ensureAllUploaded のコメント参照）。
+     */
+    private final Set<Integer> fullyUploadedLights = new HashSet<>();
     /** poly_mesh を持ち illuminated 扱いになるボーン名セット（祖先伝播考慮済み） */
     private final Set<String> illuminatedBones = new HashSet<>();
     /** 描画から除外するサブツリーのルートボーン名（additional_magazine 対応用） */
     private String excludeSubtreeRoot = null;
     /** excludeSubtreeRoot 配下のボーン名セット（毎回計算しないようキャッシュ） */
     private final Set<String> excludedBones = new HashSet<>();
+
+    /**
+     * TacZ のスコープ処理で「TacZ 側の描画タイミングで描く」必要があるボーンのグループ。
+     * 各グループは hidden フラグが true の間、通常描画パス（VBO / VertexConsumer 両方）から
+     * 除外され、{@link #renderSubtreeForStencil} からのみ描画される。
+     *   - ocularBones     : ocular / ocular_sight / ocular_scope（とその配下）
+     *   - ocularRingBones : ocular_ring（とその配下）
+     *   - divisionBones   : division / division_2 ...（とその配下）。TacZ はキューブの division を
+     *                       読み込み時に非表示にし、スコープ処理の中でしか描かないため、
+     *                       このグループは常に通常描画パスから除外する。
+     */
+    private final Set<String> ocularBones = new HashSet<>();
+    private final Set<String> ocularRingBones = new HashSet<>();
+    private final Set<String> divisionBones = new HashSet<>();
+    /**
+     * ocular 系・division 系の「ボーン本体」の名前（配下は含まない）。
+     * renderSubtreeForStencil で、描画対象の配下に別の ocular / division が
+     * ぶら下がっている場合にそれを描かないようにするために使う。
+     */
+    private final Set<String> specialRootBones = new HashSet<>();
+    private boolean ocularBonesHidden = false;
+    private boolean ocularRingBonesHidden = false;
 
     private static final Function<ResourceLocation, RenderType> TRANSLUCENT_CULL =
             Util.memoize(RenderType::entityTranslucentCull);
@@ -82,7 +111,14 @@ public class PolyMeshModel {
                 pX=p.get(0).getAsFloat(); pY=p.get(1).getAsFloat(); pZ=p.get(2).getAsFloat();
             }
             PolyMesh mesh = new PolyMesh(boneObj.getAsJsonObject("poly_mesh"), texW, texH, new float[]{pX,pY,pZ});
-            if (mesh.getVertexCount() > 0) meshMap.computeIfAbsent(name, k -> new ArrayList<>()).add(mesh);
+            if (mesh.getVertexCount() > 0) {
+                // あるメッシュでライト値の VBO が LRU 破棄されたら、そのライト値は
+                // 「全メッシュがアップロード済み」ではなくなるので、記録から外す。
+                // 次にそのライト値で描画するときは VertexConsumer 経路で描画しつつ
+                // 再アップロードされる（ensureAllUploaded）。
+                mesh.setEvictionListener(evictedLight -> fullyUploadedLights.remove(evictedLight));
+                meshMap.computeIfAbsent(name, k -> new ArrayList<>()).add(mesh);
+            }
         }
     }
 
@@ -139,55 +175,38 @@ public class PolyMeshModel {
      * 見た目やボーンの独立した表示切り替えには一切影響を与えずに、この無駄を
      * 削減する。
      */
-    private void collectVisibleMeshBoneNames(IPolyMeshBone bone, Set<String> out) {
-        if (!bone.isVisible()) return;
-        if (!meshAncestorBones.contains(bone.getName())) return;
-        if (!excludedBones.isEmpty() && excludedBones.contains(bone.getName())) return;
-
-        if (meshMap.containsKey(bone.getName())) {
-            out.add(bone.getName());
-        }
-        for (IPolyMeshBone child : bone.getChildren()) {
-            collectVisibleMeshBoneNames(child, out);
-        }
-    }
-
+    /**
+     * 現在のライト値について、meshMap の全ボーンが VBO アップロード済みかどうか。
+     *
+     * 【設計変更の経緯】以前はボーンツリーを毎フレーム走査して「今表示中の
+     * ボーンだけ」を対象にチェックしていたが、これには2つの問題があった:
+     *   1. ツリー走査自体のコスト（HashSet 割り当てを含む）が毎フレーム発生する
+     *   2. リロード等でボーンの表示/非表示が頻繁に切り替わるアニメーション中や、
+     *      移動によってライト値が細かく変動する状況で、"表示中ボーンの一部が
+     *      未アップロード" と判定される頻度が上がり、その都度アップロード
+     *      処理（ensureAllUploaded）が走ってしまう
+     *
+     * 今回は「あるライト値について、一度でも ensureAllUploaded() が完走した
+     * ことがあるか」を {@link #fullyUploadedLights} で記録するだけにした。
+     * ensureAllUploaded() は常に meshMap の全ボーン（表示/非表示問わず）を
+     * 対象にするため、一度完走すれば、以後そのライト値については
+     * どのボーンが表示されようと（表示が切り替わろうと）再チェックが不要に
+     * なる。これにより allVboReady() はボーンツリーを一切走査しない、
+     * 単純な O(1) の集合参照だけで済むようになった。
+     */
     private boolean allVboReady(int light) {
         if (meshMap.isEmpty()) return false;
-        Set<String> visibleBones = new HashSet<>();
-        collectVisibleMeshBoneNames(root, visibleBones);
-        if (visibleBones.isEmpty()) return true;
-        for (String boneName : visibleBones) {
-            List<PolyMesh> meshes = meshMap.get(boneName);
-            if (meshes == null) continue;
-            int checkLight = illuminatedBones.contains(boneName) ? 15728880 : light;
-            for (PolyMesh m : meshes) { if (!m.isVboReady(checkLight)) return false; }
-        }
-        return true;
+        return fullyUploadedLights.contains(light);
     }
 
     private void ensureAllUploaded(int light) {
-        // 【重要】ここは意図的に「現在表示中のボーンだけ」に絞らず、
-        // meshMap の全ボーンを対象にアップロードする。
-        //
-        // 経緯: 当初 allVboReady() と同様に表示中のボーンだけに絞っていたが、
-        // これによりリロード等の一部アニメーション（排莢・ボルト操作などで
-        // ボーンの表示/非表示が頻繁に切り替わるもの）の最中に、新しく表示
-        // されるボーンが現れるたびに毎回「初めての」VBOアップロードが発生し、
-        // アニメーション中だけ FPS が低下する不具合を引き起こした
-        // （AR の有無に関係なく発生し、メッシュ銃でのみ発生することから
-        // この処理が原因と判明）。
-        //
-        // このメソッドが呼ばれるのは allVboReady()（表示中のボーンだけを
-        // 見る高速判定）が false を返した場合のみであり、頻繁には発生しない。
-        // その数少ない機会に全ボーンをまとめてアップロードしておくことで、
-        // 後で別のボーンが新たに表示された時に改めてアップロードが必要に
-        // なる事態を防ぐ（先読み）。
         for (Map.Entry<String, List<PolyMesh>> entry : meshMap.entrySet()) {
             int bakeLight = illuminatedBones.contains(entry.getKey()) ? 15728880 : light;
             for (PolyMesh m : entry.getValue()) m.ensureUploaded(bakeLight);
         }
+        fullyUploadedLights.add(light);
     }
+
 
     /**
      * 全 PolyMesh の VBO キャッシュを破棄する。
@@ -200,6 +219,7 @@ public class PolyMeshModel {
         for (List<PolyMesh> meshes : meshMap.values()) {
             for (PolyMesh m : meshes) m.invalidateVboCache();
         }
+        fullyUploadedLights.clear();
     }
 
     // =========================================================================
@@ -220,6 +240,9 @@ public class PolyMeshModel {
         if (!bone.isVisible()) return;
         if (!meshAncestorBones.contains(bone.getName())) return;
         if (!excludedBones.isEmpty() && excludedBones.contains(bone.getName())) return;
+        if (ocularBonesHidden && ocularBones.contains(bone.getName())) return;
+        if (ocularRingBonesHidden && ocularRingBones.contains(bone.getName())) return;
+        if (divisionBones.contains(bone.getName())) return;
 
         ps.pushPose();
         bone.applyTransform(ps);
@@ -252,6 +275,9 @@ public class PolyMeshModel {
         if (!bone.isVisible()) return;
         if (!meshAncestorBones.contains(bone.getName())) return;
         if (!excludedBones.isEmpty() && excludedBones.contains(bone.getName())) return;
+        if (ocularBonesHidden && ocularBones.contains(bone.getName())) return;
+        if (ocularRingBonesHidden && ocularRingBones.contains(bone.getName())) return;
+        if (divisionBones.contains(bone.getName())) return;
 
         ps.pushPose();
         bone.applyTransform(ps);
@@ -326,6 +352,90 @@ public class PolyMeshModel {
         if (bone == null) return;
         VertexConsumer vc = buf.getBuffer(RenderType.entityCutoutNoCull(tex));
         renderBonesConsumer(bone, ps, vc, light, overlay, 0f, 0f, 0f, 0f, false);
+    }
+
+    // =========================================================================
+    // ステンシル専用ボーン（TacZ ocular 系）対応
+    // =========================================================================
+
+    /** ocular 系ボーン（とその配下）を登録する。モデル読み込み時に 1 回だけ呼ぶ想定。 */
+    public void setOcularSubtrees(Collection<String> rootBoneNames) {
+        collectSubtrees(rootBoneNames, ocularBones);
+        specialRootBones.addAll(rootBoneNames);
+    }
+
+    /**
+     * division 系ボーン（とその配下）を登録する。モデル読み込み時に 1 回だけ呼ぶ想定。
+     * 登録したボーンは常に通常描画パスから除外される。
+     */
+    public void setDivisionSubtrees(Collection<String> rootBoneNames) {
+        collectSubtrees(rootBoneNames, divisionBones);
+        specialRootBones.addAll(rootBoneNames);
+    }
+
+    /** ocular_ring ボーン（とその配下）を登録する。モデル読み込み時に 1 回だけ呼ぶ想定。 */
+    public void setOcularRingSubtrees(Collection<String> rootBoneNames) {
+        collectSubtrees(rootBoneNames, ocularRingBones);
+    }
+
+    private void collectSubtrees(Collection<String> rootBoneNames, Set<String> result) {
+        result.clear();
+        for (String name : rootBoneNames) {
+            IPolyMeshBone bone = findBone(this.root, name);
+            if (bone != null) collectSubtreeBones(bone, result);
+        }
+    }
+
+    /** true にすると、ocular 系ボーンを通常描画パスから除外する */
+    public void setOcularBonesHidden(boolean hidden) {
+        this.ocularBonesHidden = hidden;
+    }
+
+    /** true にすると、ocular_ring ボーンを通常描画パスから除外する */
+    public void setOcularRingBonesHidden(boolean hidden) {
+        this.ocularRingBonesHidden = hidden;
+    }
+
+    /**
+     * TacZ の renderTempPart() から呼ばれ、指定ボーン配下のメッシュを
+     * 渡された VertexConsumer に書き込む。
+     *
+     * <p>キューブと同じ扱いにするため、isVisible()、excludedBones、各 hidden フラグ、
+     * translucent 分割はすべて無視する。面は両面で書き込む（TacZ の RenderType は
+     * 裏面カリングありのため。{@link PolyMesh#compileConsumerDoubleSided} 参照）。GL のステンシル／カラーマスク／デプスマスク状態は
+     * TacZ 側が設定済みのものをそのまま使う（ここでは一切触らない）。</p>
+     *
+     * <p>poseStack には対象ボーンの「親まで」の変換が適用済みである前提。
+     * 対象ボーン自身の変換はここで適用する（BedrockPart.render() と同じ）。</p>
+     *
+     * <p>描画対象の配下に別の ocular / division ボーンがある場合、それは描かない
+     * （キューブの場合も、それらは TacZ によって非表示にされているため描かれない）。</p>
+     */
+    public void renderSubtreeForStencil(String rootBoneName, PoseStack ps,
+                                        VertexConsumer vc, int light, int overlay) {
+        IPolyMeshBone bone = findBone(this.root, rootBoneName);
+        if (bone == null) return;
+        renderBonesForStencil(bone, ps, vc, light, overlay, true);
+    }
+
+    private void renderBonesForStencil(IPolyMeshBone bone, PoseStack ps, VertexConsumer vc,
+                                       int light, int overlay, boolean isTop) {
+        if (!meshAncestorBones.contains(bone.getName())) return;
+        if (!isTop && specialRootBones.contains(bone.getName())) return;
+
+        ps.pushPose();
+        bone.applyTransform(ps);
+
+        List<PolyMesh> meshes = meshMap.get(bone.getName());
+        if (meshes != null) {
+            int actualLight = (bone.isIlluminated() || illuminatedBones.contains(bone.getName())) ? 15728880 : light;
+            for (PolyMesh mesh : meshes) mesh.compileConsumerDoubleSided(ps.last(), vc, actualLight, overlay, 1f, 1f, 1f, 1f);
+        }
+        for (IPolyMeshBone child : bone.getChildren()) {
+            renderBonesForStencil(child, ps, vc, light, overlay, false);
+        }
+
+        ps.popPose();
     }
 
     /** ボーン名でツリーを検索する */
