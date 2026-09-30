@@ -6,6 +6,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.PoseStack;
+import com.mojang.blaze3d.vertex.VertexConsumer;
 import com.tacz.guns.api.TimelessAPI;
 import com.tacz.guns.api.item.IAttachment;
 import com.tacz.guns.client.model.BedrockAttachmentModel;
@@ -37,6 +38,8 @@ public class TaczPolyMeshAttachmentModel extends BedrockAttachmentModel {
     private List<IPolyMeshBone> cachedRootChildren = null;
 
     private final Set<String> ocularPolyMeshBoneNames = new HashSet<>();
+    private final Set<String> ocularRingPolyMeshBoneNames = new HashSet<>();
+    private final Set<String> divisionPolyMeshBoneNames = new HashSet<>();
 
     private static final java.lang.reflect.Field SCOPE_VIEW_RADIUS_FIELD;
     static {
@@ -173,6 +176,18 @@ public class TaczPolyMeshAttachmentModel extends BedrockAttachmentModel {
         final boolean isGuiLike = com.example.taczmeshloader.render.ScreenRenderTracker.isRenderingScreen();
         final boolean useVBO = !isGuiLike;
         final boolean isFirstPersonScopeOrSight = transformType.firstPerson() && isScope();
+        // TacZ は一人称で scope または sight のとき、ocular をステンシル処理の中でのみ描画し、
+        // 通常描画では描かない。メッシュの ocular も同じ扱いにするため、この条件の間は
+        // 通常のメッシュ描画パスから ocular 系ボーンを除外する
+        // （ステンシル処理側の描画は BedrockAttachmentModelMixin → renderStencilPartMesh が担当）。
+        final boolean hideOcularMeshes = transformType.firstPerson() && (isScope() || isSight())
+                && !ocularPolyMeshBoneNames.isEmpty();
+        // ocular_ring も同様。TacZ は一人称スコープ時、ocular_ring を「ステンシル書き込みより前」に
+        // 描く（リングが手前にあると、その部分には ocular のステンシルが書き込まれない）。
+        // 通常のメッシュ描画パスで後から描くと、ocular のステンシル領域に隠されて消えてしまうため、
+        // この条件の間は通常パスから外し、TacZ の描画タイミングで描く（renderStencilPartMesh が担当）。
+        final boolean hideOcularRingMeshes = isFirstPersonScopeOrSight
+                && !ocularRingPolyMeshBoneNames.isEmpty();
 
         Minecraft mc2 = Minecraft.getInstance();
         MultiBufferSource.BufferSource bufferSource = mc2.renderBuffers().bufferSource();
@@ -199,12 +214,19 @@ public class TaczPolyMeshAttachmentModel extends BedrockAttachmentModel {
             // TaczPolyMeshGunModel と同じ理由。影の形状はキューブボディで十分なため、
             // シャドウパス中はステンシル・通常描画のどちらも行わない。
             final boolean isRenderingShadowPass = com.tacz.guns.compat.iris.IrisCompat.isRenderShadow();
-            if (isRenderingShadowPass) {
-                // 何もしない: super.render() のキューブボディで十分
-            } else if (isFirstPersonScopeOrSight) {
-                renderPolyMeshThroughStencilHole(poseStack, bufferSource, cachedTexture, light, overlay, useVBO);
-            } else {
-                renderPolyMeshNormalAttachment(poseStack, bufferSource, cachedTexture, light, overlay, useVBO);
+            polyMeshModel.setOcularBonesHidden(hideOcularMeshes);
+            polyMeshModel.setOcularRingBonesHidden(hideOcularRingMeshes);
+            try {
+                if (isRenderingShadowPass) {
+                    // 何もしない: super.render() のキューブボディで十分
+                } else if (isFirstPersonScopeOrSight) {
+                    renderPolyMeshThroughStencilHole(poseStack, bufferSource, cachedTexture, light, overlay, useVBO);
+                } else {
+                    renderPolyMeshNormalAttachment(poseStack, bufferSource, cachedTexture, light, overlay, useVBO);
+                }
+            } finally {
+                polyMeshModel.setOcularBonesHidden(false);
+                polyMeshModel.setOcularRingBonesHidden(false);
             }
             boolean hasTrans = this.polyMeshModel.hasTranslucentMeshes();
 
@@ -286,8 +308,31 @@ public class TaczPolyMeshAttachmentModel extends BedrockAttachmentModel {
                     }
                 }
 
-                MESH_LOG.info("[MeshyLoader] Loaded attachment poly_mesh from: {} (ocularPolyMeshBones={})",
-                        modelLocation, ocularPolyMeshBoneNames);
+                ocularRingPolyMeshBoneNames.clear();
+                if (ocularRingPath != null && !ocularRingPath.isEmpty()) {
+                    BedrockPart ringLeaf = ocularRingPath.get(ocularRingPath.size() - 1);
+                    if (ringLeaf.name != null && polyMeshModel.hasMeshInSubtree(ringLeaf.name)) {
+                        ocularRingPolyMeshBoneNames.add(ringLeaf.name);
+                    }
+                }
+
+                divisionPolyMeshBoneNames.clear();
+                if (divisionNodePaths != null) {
+                    for (List<BedrockPart> path : divisionNodePaths) {
+                        if (path == null || path.isEmpty()) continue;
+                        BedrockPart leaf = path.get(path.size() - 1);
+                        if (leaf.name != null && polyMeshModel.hasMeshInSubtree(leaf.name)) {
+                            divisionPolyMeshBoneNames.add(leaf.name);
+                        }
+                    }
+                }
+
+                polyMeshModel.setOcularSubtrees(ocularPolyMeshBoneNames);
+                polyMeshModel.setOcularRingSubtrees(ocularRingPolyMeshBoneNames);
+                polyMeshModel.setDivisionSubtrees(divisionPolyMeshBoneNames);
+
+                MESH_LOG.info("[MeshyLoader] Loaded attachment poly_mesh from: {} (ocularPolyMeshBones={}, ocularRingPolyMeshBones={}, divisionPolyMeshBones={})",
+                        modelLocation, ocularPolyMeshBoneNames, ocularRingPolyMeshBoneNames, divisionPolyMeshBoneNames);
             }
         } catch (Exception e) {
             MESH_LOG.error("[MeshyDebug][loadPolyMesh] FAILED: location={}", modelLocation, e);
@@ -295,6 +340,71 @@ public class TaczPolyMeshAttachmentModel extends BedrockAttachmentModel {
     }
 
     public boolean hasPolyMesh() { return polyMeshModel != null; }
+
+    // =========================================================================
+    // ocular / ocular_ring / division メッシュ対応（BedrockAttachmentModelMixin から呼ばれる）
+    // =========================================================================
+
+    /**
+     * TacZ の BedrockAttachmentModel#renderTempPart() の先頭から呼ばれる。
+     *
+     * <p>TacZ はスコープ処理の各段階（ocular_ring の描画、ocular のステンシル書き込み、
+     * 目鏡の黒マスク、division（レティクル）の描画）で renderTempPart() を使うが、これはキューブしか描けない。
+     * ここでメッシュを TacZ のバッファに先に書き込んでおくことで、
+     * キューブと同じ結果になるようにする。</p>
+     *
+     * <ul>
+     *   <li>ocular 系：常に描く（TacZ が renderTempPart で ocular を描くのは一人称の時だけ）</li>
+     *   <li>division 系：常に描く（TacZ が renderTempPart で division を描くのは一人称の時だけ。
+     *       通常描画パスからは常に除外されている）</li>
+     *   <li>ocular_ring：一人称の時だけ描く。三人称では TacZ も renderTempPart で
+     *       ocular_ring を描くが、そちらは従来通り通常のメッシュ描画パスに任せる
+     *       （ここでも描くと二重描画になるため）</li>
+     * </ul>
+     *
+     * <p><b>書き込み先は、TacZ がそのパーツのキューブを描くのに使う RenderType の
+     * バッファそのもの</b>にする。TacZ は直後に同じ RenderType でキューブを書き込み、
+     * まとめて描画を確定させるので、メッシュはキューブと完全に同じタイミング・
+     * 同じ描画設定（シェーダー、テクスチャ、カリング、深度など）で描かれる。</p>
+     *
+     * <p>【経緯】以前はメッシュを独自の RenderType（entityCutoutNoCull）で描いて
+     * その場で確定させていた。この方法だと、メッシュのみのパーツでは TacZ 側の
+     * 描画が空になるため、直後の TacZ の処理（スコープの覗き穴の円など）が
+     * 「キューブのときとは違う描画設定」のまま実行されてしまう。NeoForge 1.21.1 版の
+     * TacZ（1.1.8-hotfix-r6）では、メッシュ化したスコープでのみ覗き穴が開かない
+     * 問題が起きており、この違いが原因と考えられる。
+     * TacZ の RenderType は裏面カリングありなので、面は両面で書き込む
+     * （{@link com.example.taczmeshloader.core.PolyMesh#compileConsumerDoubleSided}）。</p>
+     *
+     * @param renderType TacZ が renderTempPart() に渡した RenderType
+     * @param path TacZ が描画しようとしているパーツのパス（ルート → 対象パーツ）
+     */
+    public void renderStencilPartMesh(PoseStack poseStack, ItemDisplayContext transformType,
+                                      RenderType renderType, List<BedrockPart> path,
+                                      int light, int overlay) {
+        if (polyMeshModel == null || renderType == null) return;
+        if (path == null || path.isEmpty()) return;
+        BedrockPart leaf = path.get(path.size() - 1);
+        if (leaf.name == null) return;
+
+        final boolean target =
+                ocularPolyMeshBoneNames.contains(leaf.name)
+                || divisionPolyMeshBoneNames.contains(leaf.name)
+                || (ocularRingPolyMeshBoneNames.contains(leaf.name) && transformType.firstPerson());
+        if (!target) return;
+
+        MultiBufferSource.BufferSource bufferSource = Minecraft.getInstance().renderBuffers().bufferSource();
+
+        poseStack.pushPose();
+        // renderTempPart() と同様に、親パーツまでの変換を適用（対象ボーン自身の変換は PolyMeshModel 側で適用）
+        for (int i = 0; i < path.size() - 1; i++) {
+            path.get(i).translateAndRotateAndScale(poseStack);
+        }
+        // TacZ が直後に使うのと同じバッファに書き込む（確定は TacZ の renderTempPart() に任せる）
+        VertexConsumer vc = bufferSource.getBuffer(renderType);
+        polyMeshModel.renderSubtreeForStencil(leaf.name, poseStack, vc, light, overlay);
+        poseStack.popPose();
+    }
 
     private static class TaczPartAdapter implements IPolyMeshBone {
         private final BedrockPart part;

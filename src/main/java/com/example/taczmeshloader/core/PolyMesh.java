@@ -46,11 +46,22 @@ public class PolyMesh {
         protected boolean removeEldestEntry(Map.Entry<Integer, VertexBuffer> eldest) {
             if (size() > 8) {
                 if (eldest.getValue() != null) eldest.getValue().close();
+                // 破棄したことを PolyMeshModel に知らせる（知らせないと、PolyMeshModel は
+                // このライト値を「アップロード済み」と思い込んだまま VBO 描画を選び、
+                // drawVBO() が空振りしてメッシュが消える）
+                if (evictionListener != null) evictionListener.accept(eldest.getKey());
                 return true;
             }
             return false;
         }
     };
+
+    /** LRU により VBO が破棄されたときに、そのライト値を受け取るリスナー（PolyMeshModel が登録） */
+    private java.util.function.IntConsumer evictionListener = null;
+
+    public void setEvictionListener(java.util.function.IntConsumer listener) {
+        this.evictionListener = listener;
+    }
 
     // ---- フォールバック用ベイク済み配列 ----
     private final float[] bakedX, bakedY, bakedZ;
@@ -192,6 +203,41 @@ public class PolyMesh {
                     .setOverlay(overlay)
                     .setLight(lightmap)
                     .setNormal(pose, -bakedNX[i], -bakedNY[i], -bakedNZ[i]);
+        }
+    }
+
+    /**
+     * 両面描画用。各面を「元の順番」と「逆順」の 2 回書き込む。
+     *
+     * <p>TacZ のスコープ処理用パーツ（ocular / ocular_ring / division）を、TacZ が
+     * キューブの描画に使う RenderType（entityCutout = 裏面カリングあり）にそのまま
+     * 書き込むために使う。PolyMesh は Y 反転の都合で面の向きが逆になっているため、
+     * 片面だけだとカリングで消えてしまう。両向きを書いておけば、どちらか一方が
+     * 必ず表向きになり、カリングなしで描いたのと同じ見た目になる。</p>
+     */
+    public void compileConsumerDoubleSided(PoseStack.Pose pose, VertexConsumer consumer,
+                                           int lightmap, int overlay,
+                                           float red, float green, float blue, float alpha) {
+        if (vertexCount == 0) return;
+        for (int q = 0; q + 3 < vertexCount; q += 4) {
+            for (int k = 0; k < 4; k++) {
+                int i = q + k;
+                consumer.addVertex(pose, bakedX[i], bakedY[i], bakedZ[i])
+                        .setColor(red, green, blue, alpha)
+                        .setUv(bakedU[i], bakedV[i])
+                        .setOverlay(overlay)
+                        .setLight(lightmap)
+                        .setNormal(pose, -bakedNX[i], -bakedNY[i], -bakedNZ[i]);
+            }
+            for (int k = 3; k >= 0; k--) {
+                int i = q + k;
+                consumer.addVertex(pose, bakedX[i], bakedY[i], bakedZ[i])
+                        .setColor(red, green, blue, alpha)
+                        .setUv(bakedU[i], bakedV[i])
+                        .setOverlay(overlay)
+                        .setLight(lightmap)
+                        .setNormal(pose, -bakedNX[i], -bakedNY[i], -bakedNZ[i]);
+            }
         }
     }
 

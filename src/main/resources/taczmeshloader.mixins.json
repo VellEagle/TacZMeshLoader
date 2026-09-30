@@ -8,7 +8,8 @@
     "ClientAmmoIndexMixin",
     "ClientAttachmentIndexMixin",
     "ClientBlockIndexMixin",
-    "GunDisplayInstanceMixin"
+    "GunDisplayInstanceMixin",
+    "BedrockAttachmentModelMixin"
   ],
   "injectors": {
     "defaultRequire": 1
