@@ -8,7 +8,11 @@
     "ClientAmmoIndexMixin",
     "ClientAttachmentIndexMixin",
     "ClientBlockIndexMixin",
-    "GunDisplayInstanceMixin"
+    "GunDisplayInstanceMixin",
+    "BedrockAttachmentModelMixin",
+    "lrtactical.LrDisplayInstanceMixin$MeleeMixin",
+    "lrtactical.LrDisplayInstanceMixin$ConsumableMixin",
+    "lrtactical.LrDisplayInstanceMixin$ThrowableMixin"
   ],
   "injectors": {
     "defaultRequire": 1

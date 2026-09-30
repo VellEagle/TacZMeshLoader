@@ -88,4 +88,6 @@ dependencies {
 
     implementation("curse.maven:accelerated-rendering-1314021:8448200")
 
+    implementation("curse.maven:lr-tactical-1-21-1-1432620:8745260")
+
 }
