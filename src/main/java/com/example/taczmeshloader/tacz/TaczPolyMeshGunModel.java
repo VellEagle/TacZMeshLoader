@@ -52,11 +52,25 @@ public class TaczPolyMeshGunModel extends com.tacz.guns.client.model.BedrockGunM
         super(pojo, version);
     }
 
+    /**
+     * 【TacZ Refabricated 1.2.0 対応】上書きする render を「最終的に必ず通る」11 引数版に変更。
+     *
+     * <p>TacZ 1.2.0 では BedrockGunModel.render に描画先バッファ（MultiBufferSource）を
+     * 受け取る版が追加され、古い 6 引数版を含む全ての render がこの 11 引数版に
+     * 集約されるようになった。一人称描画はこの新しい版を直接呼ぶため、以前のように
+     * 6 引数版だけを上書きしていると TML の処理が一度も呼ばれず、
+     * メッシュのみの銃が完全に消えていた。</p>
+     *
+     * <p>また、描画先も TacZ から渡されたバッファを使う（一人称＋Iris 時は
+     * Iris の手部用バッファが渡される）。</p>
+     */
     @Override
     public void render(PoseStack poseStack, ItemStack stack, ItemDisplayContext transformType,
-                       RenderType renderType, int light, int overlay) {
+                       RenderType renderType, int light, int overlay,
+                       float red, float green, float blue, float alpha,
+                       MultiBufferSource bufferSource) {
         if (!this.hasPolyMesh()) {
-            super.render(poseStack, stack, transformType, renderType, light, overlay);
+            super.render(poseStack, stack, transformType, renderType, light, overlay, red, green, blue, alpha, bufferSource);
             return;
         }
         if (this.cachedTexture == null) {
@@ -67,7 +81,7 @@ public class TaczPolyMeshGunModel extends com.tacz.guns.client.model.BedrockGunM
             }
         }
         if (this.cachedTexture == null) {
-            super.render(poseStack, stack, transformType, renderType, light, overlay);
+            super.render(poseStack, stack, transformType, renderType, light, overlay, red, green, blue, alpha, bufferSource);
             return;
         }
 
@@ -82,7 +96,7 @@ public class TaczPolyMeshGunModel extends com.tacz.guns.client.model.BedrockGunM
         final boolean useVBO = !isGuiLike;
 
         Minecraft mc2 = Minecraft.getInstance();
-        MultiBufferSource.BufferSource bufferSource = mc2.renderBuffers().bufferSource();
+        // 描画先は TacZ から渡されたバッファ（bufferSource 引数）をそのまま使う
 
         if (cachedHasAdditionalMagMesh) {
             polyMeshModel.setExcludeSubtree(GunModelConstant.MAG_ADDITIONAL_NODE);
@@ -121,7 +135,7 @@ public class TaczPolyMeshGunModel extends com.tacz.guns.client.model.BedrockGunM
         com.tacz.guns.compat.ar.ARCompat.disableAcceleration();
         try {
             poseStack.pushPose();
-            super.render(poseStack, stack, transformType, renderType, light, overlay);
+            super.render(poseStack, stack, transformType, renderType, light, overlay, red, green, blue, alpha, bufferSource);
 
             final ItemStack scopeItem = getCurrentAttachmentItem().get(com.tacz.guns.api.item.attachment.AttachmentType.SCOPE);
             final com.tacz.guns.api.item.IAttachment iAttachment = com.tacz.guns.api.item.IAttachment.getIAttachmentOrNull(scopeItem);
@@ -158,21 +172,23 @@ public class TaczPolyMeshGunModel extends com.tacz.guns.client.model.BedrockGunM
                     for (com.tacz.guns.client.model.bedrock.BedrockPart p : scopePosPath) {
                         p.translateAndRotateAndScale(poseStack);
                     }
+                    // 【TacZ 1.2.0 対応】旧 6 引数版 renderAttachment は削除されたため、
+                    // アタッチメント種別と描画先バッファを渡す新しい版を使う。
                     com.tacz.guns.client.model.functional.AttachmentRender.renderAttachment(
-                            scopeItem, getCurrentGunItem(), poseStack, transformType, safeLight, safeOverlay);
+                            scopeItem, getCurrentGunItem(), com.tacz.guns.api.item.attachment.AttachmentType.SCOPE,
+                            poseStack, transformType, safeLight, safeOverlay, bufferSource);
                     poseStack.popPose();
                 }
                 java.util.Optional<com.tacz.guns.client.resource.index.ClientAttachmentIndex> attachmentIndex =
                         com.tacz.guns.api.TimelessAPI.getClientAttachmentIndex(iAttachment.getAttachmentId(scopeItem));
                 final boolean[] stencilUsed = {false};
                 attachmentIndex.ifPresent(index -> {
-                    if (index.isScope() && index.isSight()) {
+                    // 【TacZ 1.2.0 対応】TacZ 1.2.0 は「長筒スコープ（scope のみ）」用の
+                    // GL_EQUAL 0 の分岐を廃止し、scope なら常に GL_GREATER 127 を使うよう
+                    // 変更したため、銃本体のキューブと同じ条件にそろえる。
+                    if (index.isScope()) {
                         com.tacz.guns.util.RenderHelper.enableItemEntityStencilTest();
                         com.mojang.blaze3d.systems.RenderSystem.stencilFunc(org.lwjgl.opengl.GL11.GL_GREATER, 127, 0xFF);
-                        stencilUsed[0] = true;
-                    } else if (index.isScope()) {
-                        com.tacz.guns.util.RenderHelper.enableItemEntityStencilTest();
-                        com.mojang.blaze3d.systems.RenderSystem.stencilFunc(org.lwjgl.opengl.GL11.GL_EQUAL, 0, 0xFF);
                         stencilUsed[0] = true;
                     }
                 });
@@ -192,8 +208,11 @@ public class TaczPolyMeshGunModel extends com.tacz.guns.client.model.BedrockGunM
                     for (com.tacz.guns.client.model.bedrock.BedrockPart p : scopePosPath) {
                         p.translateAndRotateAndScale(poseStack);
                     }
+                    // 【TacZ 1.2.0 対応】旧 6 引数版 renderAttachment は削除されたため、
+                    // アタッチメント種別と描画先バッファを渡す新しい版を使う。
                     com.tacz.guns.client.model.functional.AttachmentRender.renderAttachment(
-                            scopeItem, getCurrentGunItem(), poseStack, transformType, safeLight, safeOverlay);
+                            scopeItem, getCurrentGunItem(), com.tacz.guns.api.item.attachment.AttachmentType.SCOPE,
+                            poseStack, transformType, safeLight, safeOverlay, bufferSource);
                     poseStack.popPose();
                 }
                 renderPolyMeshNormal(poseStack, bufferSource, cachedTexture, safeLight, safeOverlay, useVBO);
@@ -232,37 +251,28 @@ public class TaczPolyMeshGunModel extends com.tacz.guns.client.model.BedrockGunM
     // PolyMesh 描画ヘルパー
     // =========================================================================
 
-    private void renderPolyMeshWithStencil(PoseStack poseStack, MultiBufferSource.BufferSource bufferSource,
+    // 【TacZ 1.2.0 対応】TacZ から渡された描画先バッファ（MultiBufferSource）を使い、
+    // 書き出しは MeshyBuffers にまとめた（IrisCompat.endBatch の引数の型が変わったため）。
+    private void renderPolyMeshWithStencil(PoseStack poseStack, MultiBufferSource bufferSource,
                                            ResourceLocation tex, int light, int overlay, boolean useVBO) {
         polyMeshModel.renderCutoutOnly(poseStack, bufferSource, tex, light, overlay, useVBO);
-        if (!com.tacz.guns.compat.iris.IrisCompat.endBatch(bufferSource)) {
-            bufferSource.endBatch(RenderType.entityCutoutNoCull(tex));
-            bufferSource.endBatch(RenderType.entityCutout(tex));
-        }
+        com.example.taczmeshloader.render.MeshyBuffers.flushCutout(bufferSource, tex);
         if (polyMeshModel.hasTranslucentMeshes()) {
             polyMeshModel.renderTranslucentOnly(poseStack, bufferSource, tex, light, overlay, useVBO);
+            // ステンシルが有効な間に書き出す必要があるため、ここでは後回しにせずその場で書き出す
             if (!com.tacz.guns.compat.iris.IrisCompat.endBatch(bufferSource)) {
-                bufferSource.endBatch(RenderType.entityTranslucentCull(tex));
+                com.example.taczmeshloader.render.MeshyBuffers.endBatch(bufferSource, RenderType.entityTranslucentCull(tex));
             }
         }
     }
 
-    private void renderPolyMeshNormal(PoseStack poseStack, MultiBufferSource.BufferSource bufferSource,
+    private void renderPolyMeshNormal(PoseStack poseStack, MultiBufferSource bufferSource,
                                       ResourceLocation tex, int light, int overlay, boolean useVBO) {
         polyMeshModel.renderCutoutOnly(poseStack, bufferSource, tex, light, overlay, useVBO);
-        if (!com.tacz.guns.compat.iris.IrisCompat.endBatch(bufferSource)) {
-            bufferSource.endBatch(RenderType.entityCutoutNoCull(tex));
-            bufferSource.endBatch(RenderType.entityCutout(tex));
-        }
+        com.example.taczmeshloader.render.MeshyBuffers.flushCutout(bufferSource, tex);
         if (polyMeshModel.hasTranslucentMeshes()) {
             polyMeshModel.renderTranslucentOnly(poseStack, bufferSource, tex, light, overlay, useVBO);
-            if (!com.tacz.guns.compat.iris.IrisCompat.endBatch(bufferSource)) {
-                if (net.fabricmc.loader.api.FabricLoader.getInstance().isModLoaded("iris")) {
-                    bufferSource.endBatch(RenderType.entityTranslucentCull(tex));
-                } else {
-                    com.example.taczmeshloader.render.MeshyBatchFlushHandler.markTranslucentPending(tex);
-                }
-            }
+            com.example.taczmeshloader.render.MeshyBuffers.flushTranslucent(bufferSource, tex);
         }
     }
 
@@ -356,33 +366,54 @@ public class TaczPolyMeshGunModel extends com.tacz.guns.client.model.BedrockGunM
             // 既存のレンダラー（TacZ オリジナル: キューブ描画）を取得
             IFunctionalRenderer originalRenderer = (existingFunction != null) ? existingFunction.apply(bp) : null;
 
-            return (poseStack, vertexBuffer, transformType, light, overlay) -> {
-                // 1. TacZ オリジナル処理（additional_magazine + magazine キューブ描画）
-                if (originalRenderer != null) {
-                    originalRenderer.render(poseStack, vertexBuffer, transformType, light, overlay);
+            // 【TacZ 1.2.0 対応】IFunctionalRenderer に描画先バッファ付きの render が追加されたため、
+            // 両方の版を実装し、バッファ付きで呼ばれた場合は TacZ オリジナルにもそのまま渡す。
+            return new IFunctionalRenderer() {
+                @Override
+                public void render(PoseStack poseStack, com.mojang.blaze3d.vertex.VertexConsumer vertexBuffer,
+                                   ItemDisplayContext transformType, int light, int overlay) {
+                    if (originalRenderer != null) {
+                        originalRenderer.render(poseStack, vertexBuffer, transformType, light, overlay);
+                    }
+                    renderMagazineMesh(bp, poseStack, vertexBuffer, light, overlay);
                 }
 
-                // 2. additional_magazine の visible が true のときのみ poly_mesh を描画する。
-                //    visible は ModelAdditionalMagazineListener によってアニメーション再生中に
-                //    true にセットされる。false のときは描画しない（TacZ と同じ挙動）。
-                if (!bp.visible) return;
-
-                if (hasPolyMesh()) {
-                    // 2a. magazine（MAG_NORMAL_NODE）サブツリーの poly_mesh を描画。
-                    //     TacZ オリジナルが magazine キューブを複製して描画するのと同様に、
-                    //     PolyMesh 側も magazine メッシュを additional_magazine の座標に描画する。
-                    if (cachedHasMagMesh) {
-                        polyMeshModel.renderSubtreeDirect(
-                                GunModelConstant.MAG_NORMAL_NODE, poseStack, vertexBuffer, light, overlay);
+                @Override
+                public void render(PoseStack poseStack, com.mojang.blaze3d.vertex.VertexConsumer vertexBuffer,
+                                   ItemDisplayContext transformType, int light, int overlay,
+                                   MultiBufferSource bufferSource) {
+                    if (originalRenderer != null) {
+                        originalRenderer.render(poseStack, vertexBuffer, transformType, light, overlay, bufferSource);
                     }
-                    // 2b. additional_magazine サブツリー自体の poly_mesh を描画。
-                    if (cachedHasAdditionalMagMesh) {
-                        polyMeshModel.renderSubtreeDirect(
-                                GunModelConstant.MAG_ADDITIONAL_NODE, poseStack, vertexBuffer, light, overlay);
-                    }
+                    renderMagazineMesh(bp, poseStack, vertexBuffer, light, overlay);
                 }
             };
         };
+    }
+
+    /** additional_magazine 用の poly_mesh 描画（旧ラムダ内の処理をそのまま移動）。 */
+    private void renderMagazineMesh(com.tacz.guns.client.model.bedrock.BedrockPart bp, PoseStack poseStack,
+                                    com.mojang.blaze3d.vertex.VertexConsumer vertexBuffer, int light, int overlay) {
+
+        // 2. additional_magazine の visible が true のときのみ poly_mesh を描画する。
+        //    visible は ModelAdditionalMagazineListener によってアニメーション再生中に
+        //    true にセットされる。false のときは描画しない（TacZ と同じ挙動）。
+        if (!bp.visible) return;
+
+        if (hasPolyMesh()) {
+            // 2a. magazine（MAG_NORMAL_NODE）サブツリーの poly_mesh を描画。
+            //     TacZ オリジナルが magazine キューブを複製して描画するのと同様に、
+            //     PolyMesh 側も magazine メッシュを additional_magazine の座標に描画する。
+            if (cachedHasMagMesh) {
+                polyMeshModel.renderSubtreeDirect(
+                        GunModelConstant.MAG_NORMAL_NODE, poseStack, vertexBuffer, light, overlay);
+            }
+            // 2b. additional_magazine サブツリー自体の poly_mesh を描画。
+            if (cachedHasAdditionalMagMesh) {
+                polyMeshModel.renderSubtreeDirect(
+                        GunModelConstant.MAG_ADDITIONAL_NODE, poseStack, vertexBuffer, light, overlay);
+            }
+        }
     }
 
     /**

@@ -4,6 +4,7 @@ import com.example.taczmeshloader.tacz.TaczPolyMeshAttachmentModel;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.tacz.guns.client.model.BedrockAttachmentModel;
 import com.tacz.guns.client.model.bedrock.BedrockPart;
+import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.world.item.ItemDisplayContext;
 import org.spongepowered.asm.mixin.Mixin;
@@ -33,12 +34,26 @@ import java.util.List;
 @Mixin(value = BedrockAttachmentModel.class, remap = false)
 public class BedrockAttachmentModelMixin {
 
+    /**
+     * 【TacZ Refabricated 1.2.0 対応】TacZ 1.2.0 で renderTempPart に「描画先バッファ」
+     * （8 引数版はさらに「不透明度 alpha」）の引数が追加され、引数違いの版が 2 つになった。
+     * 旧引数のままでは Mixin の適用に失敗してクラッシュするため、引数を合わせる。
+     *
+     * <p>Fabric では実行時に Minecraft のクラス名が別名（intermediary）になるため、
+     * 引数の型まで書いた指定は実行時に一致しない。そこで名前だけで指定し、
+     * クラス内で先に宣言されている 7 引数版（List, MultiBufferSource）に注入する。
+     * 7 引数版は 8 引数版を呼ぶだけで、TML が対象にする ocular / division / ocular_ring
+     * （一人称のステンシル処理）は必ずこの 7 引数版を通る。</p>
+     *
+     * <p>描画先バッファは TacZ が使っているものをそのままメッシュ描画にも渡す。</p>
+     */
     @Inject(method = "renderTempPart", at = @At("HEAD"))
     private void meshyloader$renderOcularMesh(PoseStack poseStack, ItemDisplayContext transformType,
                                               RenderType renderType, int light, int overlay,
-                                              List<BedrockPart> path, CallbackInfo ci) {
+                                              List<BedrockPart> path, MultiBufferSource bufferSource,
+                                              CallbackInfo ci) {
         if ((Object) this instanceof TaczPolyMeshAttachmentModel polyModel) {
-            polyModel.renderStencilPartMesh(poseStack, transformType, renderType, path, light, overlay);
+            polyModel.renderStencilPartMesh(poseStack, transformType, renderType, path, light, overlay, bufferSource);
         }
     }
 }

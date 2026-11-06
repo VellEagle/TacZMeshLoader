@@ -23,6 +23,11 @@ repositories {
         name = "Modrinth"
         url = "https://api.modrinth.com/maven"
     }
+    // Parchment（Minecraft の引数名データ）の取得先。これが無いと parchment-1.20.1 が見つからずビルドが止まる
+    maven {
+        name = "ParchmentMC"
+        url = "https://maven.parchmentmc.org"
+    }
     maven {
         url "https://raw.githubusercontent.com/Fuzss/modresources/main/maven/"
     }
@@ -50,7 +55,8 @@ dependencies {
 
     // TACZ Refabricated を依存として宣言（ビルド時参照のみ）
     // 実際のJARはプレイヤーが別途導入する
-    modImplementation "curse.maven:tacz-refabricated-1334246:8153691"
+    // 【TacZ Refabricated 1.2.0 対応】9474235 = tacz-refabricated-1.0.0-forge1.2.0+mc1.20.1（CurseForge）
+    modImplementation "curse.maven:tacz-refabricated-1334246:9474235"
 
     modImplementation "curse.maven:accrelatedrendering-refabricated-1318010:7747166"
 

@@ -150,12 +150,36 @@ public class PolyMesh {
         vboCache.put(packedLight, vertexBuffer);
     }
 
+    /**
+     * drawVBO() で使う作業用の行列（毎フレームの new を避けるため使い回す）。
+     * レンダースレッドからしか呼ばれないため共有しても安全。
+     */
+    private final Matrix4f scratchModelView = new Matrix4f();
+
     public void drawVBO(Matrix4f posePose, int packedLight) {
         VertexBuffer vbo = vboCache.get(packedLight);
         if (vbo == null) return;
 
+        // 【YSM 互換対応】RenderSystem のモデルビュー行列を合成してから渡す。
+        //
+        // 通常の VertexConsumer 描画（キューブ部分など）は、頂点を PoseStack で変換した後、
+        // 描画時に RenderSystem.getModelViewMatrix() がシェーダー側で掛けられる。
+        // 以前の VBO 描画は PoseStack の行列だけを渡していたため、このモデルビュー行列が
+        // 抜け落ちていた。
+        //
+        // ワールド内の描画（地面・一人称・額縁・Oculus の影パス）ではモデルビュー行列は
+        // 単位行列（何もしない行列）なので、これまで問題が表に出なかった。
+        // しかし Yes Steve Model（YSM）の左上プレイヤープレビューは、描画前に
+        // モデルビュー行列へ「奥行き方向の移動と Z 反転」を設定してから
+        // 銃を描くため、その分が抜けたメッシュは表示範囲の外（カメラの後ろ側）に置かれ、
+        // メッシュだけが消えていた（キューブは正しく表示される）。
+        //
+        // 1.21.1 版（NeoForge / Fabric）と同じく合成することで、キューブ部分と
+        // 完全に同じ位置に描かれるようになる。単位行列の場面では結果は変わらない。
+        scratchModelView.set(RenderSystem.getModelViewMatrix()).mul(posePose);
+
         vbo.bind();
-        vbo.drawWithShader(posePose, RenderSystem.getProjectionMatrix(), RenderSystem.getShader());
+        vbo.drawWithShader(scratchModelView, RenderSystem.getProjectionMatrix(), RenderSystem.getShader());
         VertexBuffer.unbind();
     }
 
