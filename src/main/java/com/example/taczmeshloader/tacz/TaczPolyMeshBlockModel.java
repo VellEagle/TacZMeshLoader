@@ -52,29 +52,29 @@ public class TaczPolyMeshBlockModel extends BedrockModel {
     // render() オーバーライド
     // =========================================================================
 
-    @Override
-    public void render(PoseStack poseStack, ItemDisplayContext transformType,
-                       RenderType renderType, int light, int overlay) {
-        // キューブレイヤーを通常通り描画
-        super.render(poseStack, transformType, renderType, light, overlay);
-
-        // poly_mesh レイヤーを追加描画
-        renderPolyMeshLayer(poseStack, transformType, light, overlay);
-    }
-
+    /**
+     * 【TacZ 1.2.0 対応】TacZ 1.2.0 では BedrockModel.render の全ての版が、描画先バッファ付きの
+     * 10 引数版に集約されるようになった。以前のように 5 引数版と 9 引数版の両方を
+     * 上書きすると、版同士が内部で呼び合うためメッシュが二重に描かれたり、
+     * 10 引数版を直接呼ばれると一度も描かれなかったりするため、10 引数版だけを上書きする。
+     */
     @Override
     public void render(PoseStack poseStack, ItemDisplayContext transformType,
                        RenderType renderType, int light, int overlay,
-                       float red, float green, float blue, float alpha) {
-        super.render(poseStack, transformType, renderType, light, overlay, red, green, blue, alpha);
-        renderPolyMeshLayer(poseStack, transformType, light, overlay);
+                       float red, float green, float blue, float alpha,
+                       MultiBufferSource bufferSource) {
+        // キューブレイヤーを通常通り描画
+        super.render(poseStack, transformType, renderType, light, overlay, red, green, blue, alpha, bufferSource);
+
+        // poly_mesh レイヤーを追加描画（TacZ と同じ描画先バッファを使う）
+        renderPolyMeshLayer(poseStack, transformType, light, overlay, bufferSource);
     }
 
-    private void renderPolyMeshLayer(PoseStack poseStack, ItemDisplayContext transformType, int light, int overlay) {
+    private void renderPolyMeshLayer(PoseStack poseStack, ItemDisplayContext transformType, int light, int overlay,
+                                     MultiBufferSource bufferSource) {
         if (polyMeshModel == null || texture == null) return;
 
         Minecraft mc = Minecraft.getInstance();
-        MultiBufferSource.BufferSource bufferSource = mc.renderBuffers().bufferSource();
 
         // GUI・HEAD などのアイコン/2D表示コンテキストでは VBO を使わない。
         // VBO は OpenGL 直接描画のため、GUIのフレームバッファーに正しく書き込めず
@@ -99,20 +99,11 @@ public class TaczPolyMeshBlockModel extends BedrockModel {
         }
 
         polyMeshModel.renderCutoutOnly(poseStack, bufferSource, texture, light, overlay, useVBO);
-        if (!com.tacz.guns.compat.iris.IrisCompat.endBatch(bufferSource)) {
-            bufferSource.endBatch(RenderType.entityCutoutNoCull(texture));
-            bufferSource.endBatch(RenderType.entityCutout(texture));
-        }
+        com.example.taczmeshloader.render.MeshyBuffers.flushCutout(bufferSource, texture);
 
         if (polyMeshModel.hasTranslucentMeshes()) {
             polyMeshModel.renderTranslucentOnly(poseStack, bufferSource, texture, light, overlay, useVBO);
-            if (!com.tacz.guns.compat.iris.IrisCompat.endBatch(bufferSource)) {
-                if (net.neoforged.fml.ModList.get().isLoaded("iris")) {
-                    bufferSource.endBatch(RenderType.entityTranslucentCull(texture));
-                } else {
-                    MeshyBatchFlushHandler.markTranslucentPending(texture);
-                }
-            }
+            com.example.taczmeshloader.render.MeshyBuffers.flushTranslucent(bufferSource, texture);
         }
 
         if (!isGuiLike) {

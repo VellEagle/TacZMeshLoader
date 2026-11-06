@@ -432,6 +432,80 @@ public class PolyMeshModel {
         ps.popPose();
     }
 
+    // =========================================================================
+    // TaCZ: Scope Overhaul（TSO）互換
+    // =========================================================================
+
+    /**
+     * 指定ボーン配下のメッシュが占める範囲を、そのボーンのローカル座標（ピクセル単位）で返す。
+     * TacZ のキューブ（BedrockCubeBox の min/max）と同じ座標系・単位。
+     *
+     * <p>対象は {@link #renderSubtreeForStencil} と同じ（配下にある別の ocular / division は含めない）。</p>
+     *
+     * @return {minX, minY, minZ, maxX, maxY, maxZ}。メッシュが無ければ null
+     */
+    public float[] computeSubtreeBoundsInBoneSpace(String rootBoneName) {
+        IPolyMeshBone bone = findBone(this.root, rootBoneName);
+        if (bone == null) return null;
+        float[] bounds = {Float.MAX_VALUE, Float.MAX_VALUE, Float.MAX_VALUE,
+                -Float.MAX_VALUE, -Float.MAX_VALUE, -Float.MAX_VALUE};
+        collectBounds(bone, new PoseStack(), bounds, true);
+        return bounds[0] > bounds[3] ? null : bounds;
+    }
+
+    private void collectBounds(IPolyMeshBone bone, PoseStack ps, float[] bounds, boolean isTop) {
+        if (!meshAncestorBones.contains(bone.getName())) return;
+        if (!isTop && specialRootBones.contains(bone.getName())) return;
+
+        ps.pushPose();
+        // 対象ボーン自身の変換は含めない（ボーンのローカル座標で範囲を求めるため）
+        if (!isTop) bone.applyTransform(ps);
+
+        List<PolyMesh> meshes = meshMap.get(bone.getName());
+        if (meshes != null) {
+            for (PolyMesh mesh : meshes) mesh.expandBounds(ps.last().pose(), bounds);
+        }
+        for (IPolyMeshBone child : bone.getChildren()) {
+            collectBounds(child, ps, bounds, false);
+        }
+
+        ps.popPose();
+    }
+
+    /**
+     * TSO の遅延描画用。指定ボーン配下のメッシュを、渡された VertexConsumer に両面で書き込む。
+     *
+     * <p>{@link #renderSubtreeForStencil} と違い、poseStack には対象ボーン自身の変換まで
+     * 適用済みである前提（BedrockPart がキューブを描くときと同じ状態）。</p>
+     */
+    public void renderSubtreeInBoneSpace(String rootBoneName, PoseStack ps, VertexConsumer vc,
+                                         int light, int overlay, float r, float g, float b, float a) {
+        IPolyMeshBone bone = findBone(this.root, rootBoneName);
+        if (bone == null) return;
+        renderBonesInBoneSpace(bone, ps, vc, light, overlay, r, g, b, a, true);
+    }
+
+    private void renderBonesInBoneSpace(IPolyMeshBone bone, PoseStack ps, VertexConsumer vc,
+                                        int light, int overlay, float r, float g, float b, float a,
+                                        boolean isTop) {
+        if (!meshAncestorBones.contains(bone.getName())) return;
+        if (!isTop && specialRootBones.contains(bone.getName())) return;
+
+        ps.pushPose();
+        if (!isTop) bone.applyTransform(ps);
+
+        List<PolyMesh> meshes = meshMap.get(bone.getName());
+        if (meshes != null) {
+            int actualLight = (bone.isIlluminated() || illuminatedBones.contains(bone.getName())) ? 15728880 : light;
+            for (PolyMesh mesh : meshes) mesh.compileConsumerDoubleSided(ps.last(), vc, actualLight, overlay, r, g, b, a);
+        }
+        for (IPolyMeshBone child : bone.getChildren()) {
+            renderBonesInBoneSpace(child, ps, vc, light, overlay, r, g, b, a, false);
+        }
+
+        ps.popPose();
+    }
+
     /** ボーン名でツリーを検索する */
     private IPolyMeshBone findBone(IPolyMeshBone bone, String name) {
         if (name.equals(bone.getName())) return bone;

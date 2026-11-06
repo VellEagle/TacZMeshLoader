@@ -247,6 +247,25 @@ public class PolyMesh {
         compileConsumer(pose, consumer, lightmap, overlay, red, green, blue, alpha);
     }
 
+    /**
+     * 頂点を行列で変換した位置（ピクセル単位 = ブロック単位 × 16）で、範囲 bounds を広げる（TSO 互換で使用）。
+     *
+     * @param bounds {minX, minY, minZ, maxX, maxY, maxZ}
+     */
+    public void expandBounds(Matrix4f matrix, float[] bounds) {
+        org.joml.Vector3f p = new org.joml.Vector3f();
+        for (int i = 0; i < vertexCount; i++) {
+            matrix.transformPosition(bakedX[i], bakedY[i], bakedZ[i], p);
+            float x = p.x * 16.0f, y = p.y * 16.0f, z = p.z * 16.0f;
+            if (x < bounds[0]) bounds[0] = x;
+            if (y < bounds[1]) bounds[1] = y;
+            if (z < bounds[2]) bounds[2] = z;
+            if (x > bounds[3]) bounds[3] = x;
+            if (y > bounds[4]) bounds[4] = y;
+            if (z > bounds[5]) bounds[5] = z;
+        }
+    }
+
     // =========================================================================
     // パースユーティリティ
     // =========================================================================

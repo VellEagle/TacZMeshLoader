@@ -65,7 +65,10 @@ public final class ShaderStateTracker {
      */
     public static void register(PolyMeshModel model) {
         if (model != null) {
-            registeredModels.add(model);
+            // 【TacZ 1.2.0 対応】TacZ 1.2.0 はモデルを別スレッドで読み込むため、同時アクセスを防ぐ
+            synchronized (registeredModels) {
+                registeredModels.add(model);
+            }
         }
     }
 
@@ -75,7 +78,9 @@ public final class ShaderStateTracker {
      * @param model 解除するモデル
      */
     public static void unregister(PolyMeshModel model) {
-        registeredModels.remove(model);
+        synchronized (registeredModels) {
+            registeredModels.remove(model);
+        }
     }
 
     /**
@@ -102,7 +107,12 @@ public final class ShaderStateTracker {
 
         if (lastShaderState != currentState) {
             lastShaderState = currentState;
-            for (PolyMeshModel model : registeredModels) {
+            // 【TacZ 1.2.0 対応】別スレッドからの登録とぶつからないよう、一覧のコピーを取ってから処理する
+            java.util.List<PolyMeshModel> snapshot;
+            synchronized (registeredModels) {
+                snapshot = new java.util.ArrayList<>(registeredModels);
+            }
+            for (PolyMeshModel model : snapshot) {
                 model.invalidateVboCache();
             }
         }

@@ -1,0 +1,23 @@
+# Gradle（ビルドのたびに自動生成されるファイル）
+.gradle/
+build/
+out/
+
+# IDE（IntelliJ などの個人設定）
+.idea/
+*.iml
+.vscode/
+
+# 開発用の起動環境（runClient で作られるワールドや設定）
+run/
+runs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# ソースフォルダ内のバックアップ zip
+src/**/*.zip
