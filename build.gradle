@@ -125,6 +125,16 @@ repositories {
     flatDir {
         dir 'libs'
     }
+    // 【TacZ 1.2.0 対応】TacZ 1.2.0 の取得元（Modrinth maven）
+    maven {
+        url "https://api.modrinth.com/maven"
+        content { includeGroup "maven.modrinth" }
+    }
+    // 【TacZ 1.2.0 対応】SimpleBedrockModel（SBM）2.6.2 の取得元（TacZ 本体と同じ）
+    maven {
+        url 'https://jitpack.io'
+        content { includeGroup "com.github.mcmodderanchor" }
+    }
 }
 
 dependencies {
@@ -132,14 +142,15 @@ dependencies {
 
 
 
-    jarJar(implementation(fg.deobf("com.github.mcmodderanchor:simplebedrockmodel:2.2.2-forge+mc1.20.1"))) {
-        jarJar.ranged(it, "[2.2.2,)")
+    // 【TacZ 1.2.0 対応】TacZ 1.2.0 は SBM 2.6.2 を使うため、ビルド時の参照も 2.6.2 に合わせる。
+    // （jitpack から自動取得。libs フォルダに同名の jar がある場合はそちらが優先される）
+    jarJar(implementation(fg.deobf("com.github.mcmodderanchor:simplebedrockmodel:2.6.2-forge-mc1.20.1"))) {
+        jarJar.ranged(it, "[2.6.2,)")
     }
 
     implementation fg.deobf("curse.maven:tacz-lesraisins-tactical-equipements-1273094:8087337")
 
-    // TacZ 依存（compileOnly: ビルド時参照のみ、実行時は別途導入）
-    implementation fg.deobf("curse.maven:timeless-and-classics-zero-1028108:8055552")
+    implementation fg.deobf("curse.maven:timeless-and-classics-zero-1028108:9454481")
 
     implementation fg.deobf("curse.maven:accelerated-rendering-1314021:8448250")
     // Mixin annotation processor

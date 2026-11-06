@@ -1,0 +1,129 @@
+package com.example.taczmeshloader.render;
+
+import com.mojang.blaze3d.systems.RenderSystem;
+import com.mojang.blaze3d.vertex.PoseStack;
+import com.tacz.guns.client.model.bedrock.BedrockPart;
+import net.minecraftforge.api.distmarker.Dist;
+import net.minecraftforge.api.distmarker.OnlyIn;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.joml.Matrix3f;
+import org.joml.Matrix4f;
+import org.joml.Quaternionf;
+
+import java.util.List;
+
+/**
+ * メッシュ銃の一人称描画で「キューブ描画（TacZ 側）の前後で描画状態が変わっていないか」を
+ * 確認・補正するためのヘルパー。
+ *
+ * <p>TaczPolyMeshGunModel はキューブ部分（super.render）を描いた「後」にメッシュを描く。
+ * そのため、他 MOD（TacZ Arcana など）が super.render の途中で
+ * PoseStack・投影行列・ボーンの値を書き換えて元に戻さないと、
+ * キューブには影響が出ずメッシュだけがズレる。このクラスは
+ * super.render 直前の状態を記録し、直後に比較する。</p>
+ *
+ * <p>ログは一人称描画のときだけ、最大 3 秒に 1 回出力する（[MeshyDiag] で検索）。</p>
+ */
+@OnlyIn(Dist.CLIENT)
+public final class MeshDiagnostics {
+    private static final Logger LOG = LogManager.getLogger("MeshyDiag");
+    private static final long LOG_INTERVAL_MS = 3000L;
+    private static final float EPS = 1.0e-5f;
+    private static long lastLogTime = 0L;
+
+    private MeshDiagnostics() {}
+
+    /** super.render 直前の状態のスナップショット */
+    public static final class Snapshot {
+        public final PoseStack.Pose poseEntry;
+        public final Matrix4f pose;
+        public final Matrix3f normal;
+        public final Matrix4f projection;
+        private final float[][] rootValues;
+        private final List<BedrockPart> roots;
+
+        Snapshot(PoseStack poseStack, List<BedrockPart> roots) {
+            this.poseEntry = poseStack.last();
+            this.pose = new Matrix4f(poseStack.last().pose());
+            this.normal = new Matrix3f(poseStack.last().normal());
+            this.projection = new Matrix4f(RenderSystem.getProjectionMatrix());
+            this.roots = roots;
+            this.rootValues = new float[roots == null ? 0 : roots.size()][];
+            for (int i = 0; i < rootValues.length; i++) rootValues[i] = capture(roots.get(i));
+        }
+
+        /** ルートボーンのいずれかの変換値が変わっていたら、その名前を返す（無ければ null） */
+        String changedRoot() {
+            for (int i = 0; i < rootValues.length; i++) {
+                float[] now = capture(roots.get(i));
+                for (int k = 0; k < now.length; k++) {
+                    if (Math.abs(now[k] - rootValues[i][k]) > EPS) {
+                        String n = roots.get(i).name;
+                        return (n == null ? "?" : n) + " (index " + k + ": " + rootValues[i][k] + " -> " + now[k] + ")";
+                    }
+                }
+            }
+            return null;
+        }
+    }
+
+    private static float[] capture(BedrockPart p) {
+        Quaternionf q = p.additionalQuaternion;
+        return new float[]{p.x, p.y, p.z, p.offsetX, p.offsetY, p.offsetZ,
+                p.xRot, p.yRot, p.zRot, p.xScale, p.yScale, p.zScale,
+                q.x, q.y, q.z, q.w};
+    }
+
+    public static Snapshot capture(PoseStack poseStack, List<BedrockPart> roots) {
+        return new Snapshot(poseStack, roots);
+    }
+
+    /**
+     * super.render 直後に呼ぶ。PoseStack の先頭行列が書き換えられていたら直前の値に戻し、
+     * 診断ログを出す。
+     *
+     * @return 投影行列が書き換えられていた場合 true（呼び出し側でメッシュ描画中だけ元に戻す）
+     */
+    public static boolean afterCubes(Snapshot s, PoseStack poseStack, boolean firstPerson, boolean arWasOn, boolean useVBO) {
+        boolean entryChanged = poseStack.last() != s.poseEntry;
+        boolean poseChanged = !poseStack.last().pose().equals(s.pose, EPS);
+        boolean projChanged = !RenderSystem.getProjectionMatrix().equals(s.projection, EPS);
+        String rootChanged = s.changedRoot();
+
+        // メッシュはキューブと同じ基準行列で描く（他 MOD が戻し忘れた変換を無視する）
+        if (poseChanged) {
+            poseStack.last().pose().set(s.pose);
+            poseStack.last().normal().set(s.normal);
+        }
+
+        if (firstPerson) {
+            long now = System.currentTimeMillis();
+            if (now - lastLogTime >= LOG_INTERVAL_MS) {
+                lastLogTime = now;
+                boolean mvIdentity = RenderSystem.getModelViewMatrix().equals(new Matrix4f(), EPS);
+                LOG.info("[MeshyDiag] poseChanged={} stackEntryChanged={} projChanged={} rootBoneChanged={} modelViewIdentity={} arOn={} vbo={}",
+                        poseChanged, entryChanged, projChanged, rootChanged == null ? "no" : rootChanged,
+                        mvIdentity, arWasOn, useVBO);
+                if (poseChanged) {
+                    LOG.info("[MeshyDiag] pose before={} after(restored)", fmt(s.pose));
+                }
+                if (projChanged) {
+                    LOG.info("[MeshyDiag] proj before={} now={}", fmt(s.projection), fmt(RenderSystem.getProjectionMatrix()));
+                }
+                if (!mvIdentity) {
+                    LOG.info("[MeshyDiag] modelView={}", fmt(RenderSystem.getModelViewMatrix()));
+                }
+            }
+        }
+        return projChanged;
+    }
+
+    private static String fmt(Matrix4f m) {
+        return String.format("[%.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f | %.4f %.4f %.4f %.4f]",
+                m.m00(), m.m10(), m.m20(), m.m30(),
+                m.m01(), m.m11(), m.m21(), m.m31(),
+                m.m02(), m.m12(), m.m22(), m.m32(),
+                m.m03(), m.m13(), m.m23(), m.m33());
+    }
+}

@@ -160,12 +160,36 @@ public class PolyMesh {
                 net.minecraft.client.Minecraft.getInstance().screen != null);
     }
 
+    /**
+     * drawVBO() で使う作業用の行列（毎フレームの new を避けるため使い回す）。
+     * レンダースレッドからしか呼ばれないため共有しても安全。
+     */
+    private final Matrix4f scratchModelView = new Matrix4f();
+
     public void drawVBO(Matrix4f posePose, int packedLight) {
         VertexBuffer vbo = vboCache.get(packedLight);
         if (vbo == null) return;
 
+        // 【YSM 互換対応】RenderSystem のモデルビュー行列を合成してから渡す。
+        //
+        // 通常の VertexConsumer 描画（キューブ部分など）は、頂点を PoseStack で変換した後、
+        // 描画時に RenderSystem.getModelViewMatrix() がシェーダー側で掛けられる。
+        // 以前の VBO 描画は PoseStack の行列だけを渡していたため、このモデルビュー行列が
+        // 抜け落ちていた。
+        //
+        // ワールド内の描画（地面・一人称・額縁・Oculus の影パス）ではモデルビュー行列は
+        // 単位行列（何もしない行列）なので、これまで問題が表に出なかった。
+        // しかし Yes Steve Model（YSM）の左上プレイヤープレビューは、描画前に
+        // モデルビュー行列へ「奥行き方向の移動と Z 反転」を設定してから
+        // 銃を描くため、その分が抜けたメッシュは表示範囲の外（カメラの後ろ側）に置かれ、
+        // メッシュだけが消えていた（キューブは正しく表示される）。
+        //
+        // 1.21.1 版（NeoForge / Fabric）と同じく合成することで、キューブ部分と
+        // 完全に同じ位置に描かれるようになる。単位行列の場面では結果は変わらない。
+        scratchModelView.set(RenderSystem.getModelViewMatrix()).mul(posePose);
+
         vbo.bind();
-        vbo.drawWithShader(posePose, RenderSystem.getProjectionMatrix(), RenderSystem.getShader());
+        vbo.drawWithShader(scratchModelView, RenderSystem.getProjectionMatrix(), RenderSystem.getShader());
         VertexBuffer.unbind();
     }
 
@@ -223,6 +247,60 @@ public class PolyMesh {
     public void compile(PoseStack.Pose pose, VertexConsumer consumer,
                         int lightmap, int overlay, float red, float green, float blue, float alpha) {
         compileConsumer(pose, consumer, lightmap, overlay, red, green, blue, alpha);
+    }
+
+    /**
+     * 両面描画用（TSO 互換で使用）。各面を「元の順番」と「逆順」の 2 回書き込む。
+     *
+     * <p>TaCZ: Scope Overhaul の遅延描画は、TacZ がキューブの描画に使う RenderType
+     * （entityCutout = 裏面カリングあり）にそのまま書き込む。PolyMesh は Y 反転の都合で
+     * 面の向きが逆になっているため、片面だけだとカリングで消えてしまう。
+     * 両向きを書いておけば、どちらか一方が必ず表向きになる。</p>
+     */
+    public void compileConsumerDoubleSided(PoseStack.Pose pose, VertexConsumer consumer,
+                                           int lightmap, int overlay,
+                                           float red, float green, float blue, float alpha) {
+        if (vertexCount == 0) return;
+        Matrix4f pm = pose.pose();
+        Matrix3f nm = pose.normal();
+        for (int q = 0; q + 3 < vertexCount; q += 4) {
+            for (int k = 0; k < 4; k++) {
+                emitVertex(pm, nm, consumer, q + k, lightmap, overlay, red, green, blue, alpha);
+            }
+            for (int k = 3; k >= 0; k--) {
+                emitVertex(pm, nm, consumer, q + k, lightmap, overlay, red, green, blue, alpha);
+            }
+        }
+    }
+
+    private void emitVertex(Matrix4f pm, Matrix3f nm, VertexConsumer consumer, int i,
+                            int lightmap, int overlay, float red, float green, float blue, float alpha) {
+        consumer.vertex(pm, bakedX[i], bakedY[i], bakedZ[i])
+                .color(red, green, blue, alpha)
+                .uv(bakedU[i], bakedV[i])
+                .overlayCoords(overlay)
+                .uv2(lightmap)
+                .normal(nm, -bakedNX[i], -bakedNY[i], -bakedNZ[i])
+                .endVertex();
+    }
+
+    /**
+     * 頂点を行列で変換した位置（ピクセル単位 = ブロック単位 × 16）で、範囲 bounds を広げる（TSO 互換で使用）。
+     *
+     * @param bounds {minX, minY, minZ, maxX, maxY, maxZ}
+     */
+    public void expandBounds(Matrix4f matrix, float[] bounds) {
+        org.joml.Vector3f p = new org.joml.Vector3f();
+        for (int i = 0; i < vertexCount; i++) {
+            matrix.transformPosition(bakedX[i], bakedY[i], bakedZ[i], p);
+            float x = p.x * 16.0f, y = p.y * 16.0f, z = p.z * 16.0f;
+            if (x < bounds[0]) bounds[0] = x;
+            if (y < bounds[1]) bounds[1] = y;
+            if (z < bounds[2]) bounds[2] = z;
+            if (x > bounds[3]) bounds[3] = x;
+            if (y > bounds[4]) bounds[4] = y;
+            if (z > bounds[5]) bounds[5] = z;
+        }
     }
 
     // =========================================================================

@@ -10,9 +10,13 @@
     "BedrockAttachmentModelMixin",
     "ClientAmmoIndexMixin",
     "ClientBlockIndexMixin",
+    "ExternalGunItemVboRendererMixin",
+    "DisplayGunMeshGroupMixin",
     "lrtactical.LrDisplayInstanceMixin$MeleeMixin",
     "lrtactical.LrDisplayInstanceMixin$ConsumableMixin",
-    "lrtactical.LrDisplayInstanceMixin$ThrowableMixin"
+    "lrtactical.LrDisplayInstanceMixin$ThrowableMixin",
+    "tso.TsoPipLensRendererMixin",
+    "tso.BedrockGunModelStencilMixin"
   ],
   "injectors": {
     "defaultRequire": 1

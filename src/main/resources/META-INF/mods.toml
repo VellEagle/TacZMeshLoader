@@ -5,7 +5,7 @@ mixinConfigs="taczmeshloader.mixins.json"
 
 [[mods]]
 modId="taczmeshloader"
-version="0.1.8"
+version="0.2.0"
 authors = "VellEagle"
 displayName="TacZ Mesh Loader"
 displayURL = "https://www.curseforge.com/minecraft/mc-mods/tacz-mesh-loader"
@@ -29,7 +29,7 @@ description='''This mod allows TacZ to load mesh geometry created with the Meshy
 [[dependencies.${mod_id}]]
     modId="tacz"
     mandatory=true
-    versionRange="[1.1.0,)"
+    versionRange="[1.2.0,)"
     ordering="AFTER"
     side="CLIENT"
 
