@@ -95,7 +95,7 @@ public class TaczPolyMeshAttachmentModel extends BedrockAttachmentModel {
      */
     private void renderPolyMeshThroughStencilHole(
             PoseStack poseStack,
-            MultiBufferSource.BufferSource bufferSource,
+            MultiBufferSource bufferSource,
             ResourceLocation tex,
             int light, int overlay, boolean useVBO) {
 
@@ -104,12 +104,17 @@ public class TaczPolyMeshAttachmentModel extends BedrockAttachmentModel {
         RenderSystem.stencilOp(GL11.GL_KEEP, GL11.GL_KEEP, GL11.GL_KEEP);
 
         polyMeshModel.renderCutoutOnly(poseStack, bufferSource, tex, light, overlay, useVBO);
-        bufferSource.endBatch(RenderType.entityCutoutNoCull(tex));
-        bufferSource.endBatch(RenderType.entityCutout(tex));
+        // 【TacZ 1.2.0 対応】渡されたバッファのまま書き出す（ステンシル有効中に確定させる）
+        if (!com.tacz.guns.compat.iris.IrisCompat.endBatch(bufferSource)) {
+            com.example.taczmeshloader.render.MeshyBuffers.endBatch(bufferSource, RenderType.entityCutoutNoCull(tex));
+            com.example.taczmeshloader.render.MeshyBuffers.endBatch(bufferSource, RenderType.entityCutout(tex));
+        }
 
         if (polyMeshModel.hasTranslucentMeshes()) {
             polyMeshModel.renderTranslucentOnly(poseStack, bufferSource, tex, light, overlay, useVBO);
-            bufferSource.endBatch(RenderType.entityTranslucentCull(tex));
+            if (!com.tacz.guns.compat.iris.IrisCompat.endBatch(bufferSource)) {
+                com.example.taczmeshloader.render.MeshyBuffers.endBatch(bufferSource, RenderType.entityTranslucentCull(tex));
+            }
         }
 
         RenderSystem.stencilFunc(GL11.GL_ALWAYS, 0, 0xFF);
@@ -122,7 +127,7 @@ public class TaczPolyMeshAttachmentModel extends BedrockAttachmentModel {
 
     private void renderPolyMeshNormalAttachment(
             PoseStack poseStack,
-            MultiBufferSource.BufferSource bufferSource,
+            MultiBufferSource bufferSource,
             ResourceLocation tex,
             int light, int overlay, boolean useVBO) {
 
@@ -132,12 +137,20 @@ public class TaczPolyMeshAttachmentModel extends BedrockAttachmentModel {
         }
     }
 
+    /**
+     * 【TacZ Refabricated 1.2.0 対応】上書きする render を「最終的に必ず通る」9 引数版
+     * （不透明度 alpha と描画先バッファ付き）に変更。TacZ 1.2.0 では古い 7 引数版を含む
+     * 全ての render がこの版に集約され、銃に付いたアタッチメントの描画
+     * （AttachmentRender）もこの版を直接呼ぶため、古い版の上書きでは
+     * メッシュが描かれなくなっていた。
+     */
     @Override
     public void render(@Nullable ItemStack attachmentItem, ItemStack currentGunItem, PoseStack poseStack,
-                       ItemDisplayContext transformType, RenderType renderType, int light, int overlay) {
+                       ItemDisplayContext transformType, RenderType renderType, int light, int overlay,
+                       float alpha, MultiBufferSource bufferSource) {
 
         if (!this.hasPolyMesh()) {
-            super.render(attachmentItem, currentGunItem, poseStack, transformType, renderType, light, overlay);
+            super.render(attachmentItem, currentGunItem, poseStack, transformType, renderType, light, overlay, alpha, bufferSource);
             return;
         }
 
@@ -160,7 +173,7 @@ public class TaczPolyMeshAttachmentModel extends BedrockAttachmentModel {
         }
 
         if (cachedTexture == null) {
-            super.render(attachmentItem, currentGunItem, poseStack, transformType, renderType, light, overlay);
+            super.render(attachmentItem, currentGunItem, poseStack, transformType, renderType, light, overlay, alpha, bufferSource);
             return;
         }
 
@@ -190,7 +203,7 @@ public class TaczPolyMeshAttachmentModel extends BedrockAttachmentModel {
                 && !ocularRingPolyMeshBoneNames.isEmpty();
 
         Minecraft mc2 = Minecraft.getInstance();
-        MultiBufferSource.BufferSource bufferSource = mc2.renderBuffers().bufferSource();
+        // 描画先は TacZ から渡されたバッファ（bufferSource 引数）をそのまま使う
 
         // ---------- AR (Accelerated Rendering) との関わり方 ----------
         // TaczPolyMeshGunModel と同じ方針・同じ理由。AR のレイヤー機構経由で
@@ -203,7 +216,7 @@ public class TaczPolyMeshAttachmentModel extends BedrockAttachmentModel {
         // （内部で LOADED を見て安全に no-op になるため）。
         com.tacz.guns.compat.ar.ARCompat.disableAcceleration();
         try {
-            super.render(attachmentItem, currentGunItem, poseStack, transformType, renderType, light, overlay);
+            super.render(attachmentItem, currentGunItem, poseStack, transformType, renderType, light, overlay, alpha, bufferSource);
             restorePartVisibilityForPolyMesh();
 
             if (!isGuiLike) {
@@ -230,16 +243,10 @@ public class TaczPolyMeshAttachmentModel extends BedrockAttachmentModel {
             }
             boolean hasTrans = this.polyMeshModel.hasTranslucentMeshes();
 
-            if (!com.tacz.guns.compat.iris.IrisCompat.endBatch(bufferSource)) {
-                bufferSource.endBatch(RenderType.entityCutoutNoCull(cachedTexture));
-                bufferSource.endBatch(RenderType.entityCutout(cachedTexture));
-                if (hasTrans) {
-                    if (net.fabricmc.loader.api.FabricLoader.getInstance().isModLoaded("iris")) {
-                        bufferSource.endBatch(RenderType.entityTranslucentCull(cachedTexture));
-                    } else {
-                        com.example.taczmeshloader.render.MeshyBatchFlushHandler.markTranslucentPending(cachedTexture);
-                    }
-                }
+            // 【TacZ 1.2.0 対応】書き出しを MeshyBuffers にまとめた（渡されたバッファを使うため）
+            com.example.taczmeshloader.render.MeshyBuffers.flushCutout(bufferSource, cachedTexture);
+            if (hasTrans) {
+                com.example.taczmeshloader.render.MeshyBuffers.flushTranslucent(bufferSource, cachedTexture);
             }
 
             if (!isGuiLike) {
@@ -381,7 +388,7 @@ public class TaczPolyMeshAttachmentModel extends BedrockAttachmentModel {
      */
     public void renderStencilPartMesh(PoseStack poseStack, ItemDisplayContext transformType,
                                       RenderType renderType, List<BedrockPart> path,
-                                      int light, int overlay) {
+                                      int light, int overlay, @Nullable MultiBufferSource stencilBuffer) {
         if (polyMeshModel == null || renderType == null) return;
         if (path == null || path.isEmpty()) return;
         BedrockPart leaf = path.get(path.size() - 1);
@@ -393,7 +400,10 @@ public class TaczPolyMeshAttachmentModel extends BedrockAttachmentModel {
                 || (ocularRingPolyMeshBoneNames.contains(leaf.name) && transformType.firstPerson());
         if (!target) return;
 
-        MultiBufferSource.BufferSource bufferSource = Minecraft.getInstance().renderBuffers().bufferSource();
+        // 【TacZ 1.2.0 対応】TacZ が renderTempPart で使うのと同じバッファ（Mixin 経由で受け取る）に書く。
+        // 取得できない場合だけ Minecraft 全体のバッファに戻す。
+        MultiBufferSource bufferSource = stencilBuffer != null
+                ? stencilBuffer : Minecraft.getInstance().renderBuffers().bufferSource();
 
         poseStack.pushPose();
         // renderTempPart() と同様に、親パーツまでの変換を適用（対象ボーン自身の変換は PolyMeshModel 側で適用）

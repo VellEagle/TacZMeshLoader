@@ -26,7 +26,7 @@ public class GunDisplayInstanceMixin {
     private BedrockGunModel gunModel;
 
     @Shadow
-    private volatile Pair<BedrockGunModel, ResourceLocation> lodModel;
+    private Pair<BedrockGunModel, ResourceLocation> lodModel; // TacZ 1.2.0 で volatile が外れたため合わせた
 
     @Inject(method = "checkTextureAndModel", at = @At("TAIL"))
     private void meshyloader$afterCheckTextureAndModel(GunDisplay display, CallbackInfo ci) {

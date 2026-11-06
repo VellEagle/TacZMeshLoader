@@ -9,7 +9,9 @@
     "ClientAttachmentIndexMixin",
     "ClientBlockIndexMixin",
     "GunDisplayInstanceMixin",
-    "BedrockAttachmentModelMixin"
+    "BedrockAttachmentModelMixin",
+    "ExternalGunItemVboRendererMixin",
+    "DisplayGunMeshGroupMixin"
   ],
   "injectors": {
     "defaultRequire": 1

@@ -46,7 +46,9 @@ dependencies {
     modImplementation "net.fabricmc:fabric-loader:0.17.2"
     modImplementation "net.fabricmc.fabric-api:fabric-api:0.116.5+1.21.1"
 
-    modImplementation "curse.maven:tacz-refabricated-1334246:8153698"
+    // 【TacZ Refabricated 1.2.0 対応】9474300 = tacz-refabricated-1.0.0-neo1.2.0+mc1.21.1（CurseForge）
+    // 旧: modImplementation "curse.maven:tacz-refabricated-1334246:8153698"  ← 0.7.x
+    modImplementation "curse.maven:tacz-refabricated-1334246:9474300"
 
     // TACZ Refabricated (Fabric port)
     // ローカルの依存: gradle.properties や libs ディレクトリで管理推奨
