@@ -35,7 +35,7 @@ public class ClientAttachmentIndexMixin {
         ResourceLocation geoPath = new ResourceLocation(
                 modelId.getNamespace(), "geo_models/" + modelId.getPath() + ".json");
 
-        if (Minecraft.getInstance().getResourceManager().getResource(geoPath).isEmpty()) return;
+        if (!com.example.taczmeshloader.tacz.GeoMeshProbe.containsPolyMesh(geoPath)) return;
 
         BedrockModelPOJO modelPOJO = ClientAssetsManager.INSTANCE.getBedrockModelPOJO(modelId);
         if (modelPOJO == null) return;
@@ -47,6 +47,16 @@ public class ClientAttachmentIndexMixin {
         polyModel.setIsScope(display.isScope());
         polyModel.setIsSight(display.isSight());
         polyModel.loadPolyMesh(geoPath);
+
+        // 【TacZ 1.2.0 対応】TacZ のモデルファイルは geo_models/ にあるため、上の存在チェックは
+        // キューブだけのアタッチメント（TacZ 標準のスコープ等）でも通ってしまい、以前は全アタッチメントを
+        // TML のモデルに作り直していた。TacZ 1.2.0 ではモデルに「レンズ設定」（暗視・サーマル等）が
+        // 追加されたが、作り直したモデルにはそれが渡らず、TML を入れるだけで全スコープの
+        // 暗視・サーマルが効かなくなっていた。
+        // → メッシュが無ければ作り直さず、TacZ が作ったモデルをそのまま使う。
+        if (!polyModel.hasMeshData()) return;
+        // メッシュがある場合も、TacZ と同じくレンズ設定を渡す（TacZ の checkTextureAndModel と同じ値）
+        polyModel.setScopeLens(display.getScopeLens());
 
         try {
             Field field = ClientAttachmentIndex.class.getDeclaredField("attachmentModel");
@@ -97,7 +107,7 @@ public class ClientAttachmentIndexMixin {
                 lodModelId.getNamespace(),
                 "geo_models/" + lodModelId.getPath() + ".json");
 
-        if (Minecraft.getInstance().getResourceManager().getResource(geoPath).isEmpty()) return;
+        if (!com.example.taczmeshloader.tacz.GeoMeshProbe.containsPolyMesh(geoPath)) return;
 
         BedrockModelPOJO modelPOJO = ClientAssetsManager.INSTANCE.getBedrockModelPOJO(lodModelId);
         if (modelPOJO == null) return;
@@ -109,6 +119,9 @@ public class ClientAttachmentIndexMixin {
         polyLodModel.setIsScope(display.isScope());
         polyLodModel.setIsSight(display.isSight());
         polyLodModel.loadPolyMesh(geoPath);
+
+        // 【TacZ 1.2.0 対応】メッシュが無い LOD モデルは作り直さない（通常モデルと同じ理由）
+        if (!polyLodModel.hasMeshData()) return;
 
         try {
             Field lodField = ClientAttachmentIndex.class.getDeclaredField("lodModel");

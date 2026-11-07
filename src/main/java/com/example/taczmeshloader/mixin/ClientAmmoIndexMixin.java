@@ -149,7 +149,7 @@ public class ClientAmmoIndexMixin {
 
     /** geo.json が存在しない場合 true */
     private static boolean isGeoAbsent(ResourceLocation geoPath) {
-        return Minecraft.getInstance().getResourceManager().getResource(geoPath).isEmpty();
+        return !com.example.taczmeshloader.tacz.GeoMeshProbe.containsPolyMesh(geoPath);
     }
 
     /** POJO からバージョンを判定 */

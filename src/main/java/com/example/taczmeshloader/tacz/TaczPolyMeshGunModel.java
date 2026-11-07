@@ -103,7 +103,11 @@ public class TaczPolyMeshGunModel extends com.tacz.guns.client.model.BedrockGunM
         // GUI 描画（Screen#render()）が実行されている「瞬間」だけを検出する
         // （ワールド内の無関係な描画への影響を避けるため）。
         final boolean isGuiLike = com.example.taczmeshloader.render.ScreenRenderTracker.isRenderingScreen();
-        final boolean useVBO = !isGuiLike;
+        // 【TacZ 1.2.0 サーマル対応】サーマルスコープ使用中は、TacZ がエンティティの描画バッファを
+        // ThermalBuffers で包んで熱画像用に頂点を写し取る。VBO で直接描くとこれを通らず
+        // 熱画像にメッシュ銃が写らないため、その間だけ通常の描画経路（バッファ経由）で描く。
+        final boolean useVBO = !isGuiLike
+                && !(bufferSource instanceof com.tacz.guns.client.renderer.scope.ScopeThermalRenderer.ThermalBuffers);
 
         Minecraft mc2 = Minecraft.getInstance();
 
@@ -174,9 +178,18 @@ public class TaczPolyMeshGunModel extends com.tacz.guns.client.model.BedrockGunM
                     }
                     // 【TacZ 1.2.0 対応】旧 6 引数版 renderAttachment は削除されたため、
                     // アタッチメント種別と描画先バッファを渡す新しい版を使う。
-                    com.tacz.guns.client.model.functional.AttachmentRender.renderAttachment(
-                            scopeItem, getCurrentGunItem(), com.tacz.guns.api.item.attachment.AttachmentType.SCOPE,
-                            poseStack, transformType, safeLight, safeOverlay, bufferSource);
+                    // 【TacZ 1.2.0 新スコープレンズ対応】この描き直しはステンシルを作り直すためだけのもの。
+                    // TacZ 1.2.0 はスコープを描くたびにレンズを記録するため、そのままだとレンズ効果
+                    // （歪み・縁の暗さ・暗視・サーマル）が 2 回重ねがけされる。描き直しの間だけ
+                    // レンズの記録を止める（ScopeLensRendererMixin）。1 回目の記録はそのまま使われる。
+                    reRenderingScope = true;
+                    try {
+                        com.tacz.guns.client.model.functional.AttachmentRender.renderAttachment(
+                                scopeItem, getCurrentGunItem(), com.tacz.guns.api.item.attachment.AttachmentType.SCOPE,
+                                poseStack, transformType, safeLight, safeOverlay, bufferSource);
+                    } finally {
+                        reRenderingScope = false;
+                    }
                     poseStack.popPose();
                 }
                 java.util.Optional<com.tacz.guns.client.resource.index.ClientAttachmentIndex> attachmentIndex =
@@ -456,7 +469,22 @@ public class TaczPolyMeshGunModel extends com.tacz.guns.client.model.BedrockGunM
         // ここで明示的にリセットする必要はない。
     }
 
+    /**
+     * 【TacZ 1.2.0 新スコープレンズ対応】TML がステンシル作り直しのためにスコープを
+     * 描き直している最中なら true（描画スレッドからのみ使う）。
+     */
+    private static boolean reRenderingScope = false;
+
+    public static boolean isReRenderingScope() { return reRenderingScope; }
+
     public boolean hasPolyMesh() { return polyMeshModel != null; }
+
+    /**
+     * 【TacZ 1.2.0 対応】読み込んだファイルに実際にメッシュが含まれていれば true。
+     * hasPolyMesh() は「メッシュ読み込み処理が動いたか」しか見ておらず、
+     * キューブだけのモデルでも true になるため、こちらで中身まで確認する。
+     */
+    public boolean hasMeshData() { return polyMeshModel != null && polyMeshModel.hasAnyMesh(); }
 
     /** LODモデル用テクスチャを固定する。checkLod介入時に呼ぶ。 */
     public void setOverrideTexture(ResourceLocation texture) {

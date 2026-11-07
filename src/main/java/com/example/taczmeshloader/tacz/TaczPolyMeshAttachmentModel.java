@@ -190,7 +190,11 @@ public class TaczPolyMeshAttachmentModel extends BedrockAttachmentModel {
         // 状態では VBO 直接描画が正しく表示されないことが実機で確認されているため、
         // その場合は VBO を無効化する。
         final boolean isGuiLike = com.example.taczmeshloader.render.ScreenRenderTracker.isRenderingScreen();
-        final boolean useVBO = !isGuiLike;
+        // 【TacZ 1.2.0 サーマル対応】サーマルスコープ使用中は、TacZ がエンティティの描画バッファを
+        // ThermalBuffers で包んで熱画像用に頂点を写し取る。VBO で直接描くとこれを通らず
+        // 熱画像にメッシュが写らないため、その間だけ通常の描画経路（バッファ経由）で描く。
+        final boolean useVBO = !isGuiLike
+                && !(bufferSource instanceof com.tacz.guns.client.renderer.scope.ScopeThermalRenderer.ThermalBuffers);
         final boolean isFirstPersonScopeOrSight = transformType.firstPerson() && isScope();
         // TacZ は一人称で scope または sight のとき、ocular をステンシル処理の中でのみ描画し、
         // 通常描画では描かない。メッシュの ocular も同じ扱いにするため、この条件の間は
@@ -351,9 +355,46 @@ public class TaczPolyMeshAttachmentModel extends BedrockAttachmentModel {
 
     public boolean hasPolyMesh() { return polyMeshModel != null; }
 
+    /**
+     * 【TacZ 1.2.0 対応】読み込んだファイルに実際にメッシュが含まれていれば true。
+     * hasPolyMesh() は「メッシュ読み込み処理が動いたか」しか見ておらず、
+     * キューブだけのモデルでも true になるため、こちらで中身まで確認する。
+     */
+    public boolean hasMeshData() { return polyMeshModel != null && polyMeshModel.hasAnyMesh(); }
+
     // =========================================================================
     // ocular / ocular_ring / division メッシュ対応（BedrockAttachmentModelMixin から呼ばれる）
     // =========================================================================
+
+    /**
+     * 【TacZ 1.2.0 新スコープレンズ対応】TacZ 1.2.0 の新しいレンズ処理（ScopeLensRenderer）は、
+     * 接眼部（ocular）の「キューブ」だけを読み取ってレンズの範囲（画面上の位置と大きさ）を決める。
+     * 接眼部がメッシュだけのスコープでは範囲がゼロとなり、新しいレンズ表示
+     * （切り抜き・歪み・暗視 NVG・サーマル）が丸ごと使われなくなっていた。
+     * キューブとメッシュが混在する場合も、範囲が実際より小さく計算されていた。
+     *
+     * <p>BedrockAttachmentModelMixin から、TacZ が範囲を計算する直前に呼ばれ、
+     * メッシュの接眼部の頂点も同じ計算用の受け皿（bounds）に流し込む。
+     * bounds は頂点の位置だけを使い、描画は一切行わない。</p>
+     */
+    public void captureLensMeshBounds(PoseStack poseStack, List<BedrockPart> path, VertexConsumer bounds) {
+        if (polyMeshModel == null || path == null || path.isEmpty() || bounds == null) return;
+        BedrockPart leaf = path.get(path.size() - 1);
+        if (leaf.name == null || !ocularPolyMeshBoneNames.contains(leaf.name)) return;
+
+        poseStack.pushPose();
+        try {
+            // TacZ の captureLensBounds() と同様に、親パーツまでの変換を適用
+            // （対象ボーン自身の変換は PolyMeshModel 側で適用）
+            for (int i = 0; i < path.size() - 1; i++) {
+                path.get(i).translateAndRotateAndScale(poseStack);
+            }
+            polyMeshModel.renderSubtreeForStencil(leaf.name, poseStack, bounds,
+                    15728880, net.minecraft.client.renderer.texture.OverlayTexture.NO_OVERLAY);
+        } finally {
+            poseStack.popPose();
+        }
+    }
 
     /**
      * TacZ の BedrockAttachmentModel#renderTempPart() の先頭から呼ばれる。

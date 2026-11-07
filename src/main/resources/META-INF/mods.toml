@@ -5,7 +5,7 @@ mixinConfigs="taczmeshloader.mixins.json"
 
 [[mods]]
 modId="taczmeshloader"
-version="0.2.0"
+version="0.2.1"
 authors = "VellEagle"
 displayName="TacZ Mesh Loader"
 displayURL = "https://www.curseforge.com/minecraft/mc-mods/tacz-mesh-loader"

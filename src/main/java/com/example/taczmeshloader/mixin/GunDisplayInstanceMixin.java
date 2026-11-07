@@ -34,14 +34,35 @@ public class GunDisplayInstanceMixin {
 
     @Inject(method = "checkTextureAndModel", at = @At("TAIL"))
     private void meshyloader$afterCheckTextureAndModel(GunDisplay display, CallbackInfo ci) {
+        ResourceLocation modelId = display.getModelLocation();
+        if (modelId == null) return;
+        ResourceLocation geoPath = new ResourceLocation(
+                modelId.getNamespace(), "geo_models/" + modelId.getPath() + ".json");
+
+        // 1) 従来どおり "model_type": "mesh" が指定された銃（TacZ が TML 用のモデルで作成済み）
         if (this.gunModel instanceof TaczPolyMeshGunModel polyModel) {
-            ResourceLocation modelId = display.getModelLocation();
-            if (modelId != null) {
-                ResourceLocation geoPath = new ResourceLocation(
-                        modelId.getNamespace(), "geo_models/" + modelId.getPath() + ".json");
-                polyModel.loadPolyMesh(geoPath);
-            }
+            polyModel.loadPolyMesh(geoPath);
+            return;
         }
+
+        // 2) 【自動判定】"model_type" を書かなくても、モデルファイルにメッシュ（poly_mesh）があれば
+        //    TML 用のモデルに差し替える。
+        //    ・TacZ 標準の型（BedrockGunModel そのもの）の銃だけが対象。他のアドオンが登録した
+        //      独自の model_type の銃は、そのアドオンの機能を壊さないよう差し替えない。
+        //    ・メッシュの無い銃は、モデルを作り直さずに TacZ のまま使う（読み込み負荷も増えない）。
+        //    ・この直後に TacZ がアニメーションを組み立てるため、差し替えたモデルで正しく動く。
+        if (this.gunModel == null || this.gunModel.getClass() != BedrockGunModel.class) return;
+        if (!com.example.taczmeshloader.tacz.GeoMeshProbe.containsPolyMesh(geoPath)) return;
+
+        BedrockModelPOJO modelPOJO = ClientAssetsManager.INSTANCE.getBedrockModelPOJO(modelId);
+        if (modelPOJO == null) return;
+        BedrockVersion version = BedrockVersion.isLegacyVersion(modelPOJO)
+                ? BedrockVersion.LEGACY : BedrockVersion.NEW;
+
+        TaczPolyMeshGunModel polyModel = new TaczPolyMeshGunModel(modelPOJO, version);
+        polyModel.loadPolyMesh(geoPath);
+        if (!polyModel.hasMeshData()) return;
+        this.gunModel = polyModel;
     }
 
     // -----------------------------------------------------------------------
@@ -78,7 +99,7 @@ public class GunDisplayInstanceMixin {
                 lodModelId.getNamespace(),
                 "geo_models/" + lodModelId.getPath() + ".json");
 
-        if (Minecraft.getInstance().getResourceManager().getResource(geoPath).isEmpty()) return;
+        if (!com.example.taczmeshloader.tacz.GeoMeshProbe.containsPolyMesh(geoPath)) return;
 
         BedrockModelPOJO modelPOJO = ClientAssetsManager.INSTANCE.getBedrockModelPOJO(lodModelId);
         if (modelPOJO == null) return;
@@ -88,6 +109,8 @@ public class GunDisplayInstanceMixin {
 
         TaczPolyMeshGunModel polyLodModel = new TaczPolyMeshGunModel(modelPOJO, version);
         polyLodModel.loadPolyMesh(geoPath);
+        // メッシュが無い LOD モデルは作り直さず、TacZ のまま使う
+        if (!polyLodModel.hasMeshData()) return;
         // LOD専用テクスチャを固定（display.getModelTexture()ではなくlod.textureを使う）
 
         // lodModel フィールドを差し替え（テクスチャは既存のものを引き継ぐ）

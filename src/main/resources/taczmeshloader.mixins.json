@@ -12,6 +12,7 @@
     "ClientBlockIndexMixin",
     "ExternalGunItemVboRendererMixin",
     "DisplayGunMeshGroupMixin",
+    "ScopeLensRendererMixin",
     "lrtactical.LrDisplayInstanceMixin$MeleeMixin",
     "lrtactical.LrDisplayInstanceMixin$ConsumableMixin",
     "lrtactical.LrDisplayInstanceMixin$ThrowableMixin",
