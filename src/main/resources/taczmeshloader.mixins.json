@@ -11,7 +11,11 @@
     "GunDisplayInstanceMixin",
     "BedrockAttachmentModelMixin",
     "ExternalGunItemVboRendererMixin",
-    "DisplayGunMeshGroupMixin"
+    "DisplayGunMeshGroupMixin",
+    "ScopeLensRendererMixin",
+    "lrtactical.LrDisplayInstanceMixin$MeleeMixin",
+    "lrtactical.LrDisplayInstanceMixin$ConsumableMixin",
+    "lrtactical.LrDisplayInstanceMixin$ThrowableMixin"
   ],
   "injectors": {
     "defaultRequire": 1

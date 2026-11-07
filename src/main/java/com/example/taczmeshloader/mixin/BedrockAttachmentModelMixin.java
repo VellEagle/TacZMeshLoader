@@ -2,6 +2,7 @@ package com.example.taczmeshloader.mixin;
 
 import com.example.taczmeshloader.tacz.TaczPolyMeshAttachmentModel;
 import com.mojang.blaze3d.vertex.PoseStack;
+import com.mojang.blaze3d.vertex.VertexConsumer;
 import com.tacz.guns.client.model.BedrockAttachmentModel;
 import com.tacz.guns.client.model.bedrock.BedrockPart;
 import net.minecraft.client.renderer.MultiBufferSource;
@@ -54,6 +55,22 @@ public class BedrockAttachmentModelMixin {
                                               CallbackInfo ci) {
         if ((Object) this instanceof TaczPolyMeshAttachmentModel polyModel) {
             polyModel.renderStencilPartMesh(poseStack, transformType, renderType, path, light, overlay, bufferSource);
+        }
+    }
+
+    /**
+     * 【TacZ 1.2.0 新スコープレンズ対応】TacZ がレンズの範囲を計算する処理（captureLensBounds）の
+     * 先頭に割り込み、メッシュの接眼部の頂点も範囲の計算に加える。
+     * 詳細は {@link TaczPolyMeshAttachmentModel#captureLensMeshBounds} を参照。
+     *
+     * <p>captureLensBounds は同名の別版が無いため名前だけで指定する（全ローダー共通）。
+     * require = 0：TacZ の今後の更新でこの処理が無くなっても、クラッシュはさせない。</p>
+     */
+    @Inject(method = "captureLensBounds", at = @At("HEAD"), require = 0)
+    private void meshyloader$captureLensMeshBounds(PoseStack poseStack, List<BedrockPart> path,
+                                                   VertexConsumer bounds, CallbackInfo ci) {
+        if ((Object) this instanceof TaczPolyMeshAttachmentModel polyModel) {
+            polyModel.captureLensMeshBounds(poseStack, path, bounds);
         }
     }
 }

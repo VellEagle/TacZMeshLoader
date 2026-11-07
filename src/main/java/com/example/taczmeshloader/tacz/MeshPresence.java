@@ -69,10 +69,10 @@ public final class MeshPresence {
     }
 
     private static boolean isMeshGun(BedrockGunModel model) {
-        return model instanceof TaczPolyMeshGunModel mesh && mesh.hasPolyMesh();
+        return model instanceof TaczPolyMeshGunModel mesh && mesh.hasMeshData();
     }
 
     private static boolean isMeshAttachment(BedrockAttachmentModel model) {
-        return model instanceof TaczPolyMeshAttachmentModel mesh && mesh.hasPolyMesh();
+        return model instanceof TaczPolyMeshAttachmentModel mesh && mesh.hasMeshData();
     }
 }

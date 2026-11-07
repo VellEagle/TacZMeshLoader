@@ -50,6 +50,10 @@ dependencies {
     // 旧: modImplementation "curse.maven:tacz-refabricated-1334246:8153698"  ← 0.7.x
     modImplementation "curse.maven:tacz-refabricated-1334246:9474300"
 
+    // 【LR Tactical 対応】[UNOFFICIAL] LRTactical Fabric 0.4.1（Modrinth: lrtactical-fabric / バージョンID cTxYuDdW）
+    // コンパイル時の参照のみ。LR は必須ではなく、入っていない環境では LR 用の処理は何もしない。
+    modCompileOnly "maven.modrinth:lrtactical-fabric:cTxYuDdW"
+
     // TACZ Refabricated (Fabric port)
     // ローカルの依存: gradle.properties や libs ディレクトリで管理推奨
     // curse.maven や modrinth から取得する場合は適宜変更してください
