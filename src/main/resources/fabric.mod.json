@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "id": "taczmeshloader",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "name": "TacZ Mesh Loader",
   "description": "This mod allows TacZ Refabricated to load mesh geometry created with the Meshy plugin.",
   "authors": ["VellEagle"],

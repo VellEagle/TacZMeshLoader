@@ -72,6 +72,13 @@ public class PolyMeshModel {
 
     public boolean hasTranslucentMeshes() { return hasTranslucent; }
 
+    /**
+     * メッシュ（poly_mesh）が 1 つでも読み込まれていれば true。
+     * TacZ のモデルファイルは geo_models/ に置かれるため、メッシュを含まない普通のキューブモデルでも
+     * ファイル自体は必ず存在する。「ファイルがある」ではなく「メッシュがある」を判定するために使う。
+     */
+    public boolean hasAnyMesh() { return !meshMap.isEmpty(); }
+
     private boolean buildMeshAncestors(IPolyMeshBone bone, Deque<String> path) {
         String name = bone.getName();
         path.addLast(name);
