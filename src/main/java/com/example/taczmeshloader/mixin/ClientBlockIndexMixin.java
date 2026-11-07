@@ -50,7 +50,7 @@ public class ClientBlockIndexMixin {
                 modelId.getNamespace(),
                 "geo_models/" + modelId.getPath() + ".json");
 
-        if (Minecraft.getInstance().getResourceManager().getResource(geoPath).isEmpty()) return;
+        if (!com.example.taczmeshloader.tacz.GeoMeshProbe.containsPolyMesh(geoPath)) return;
 
         BedrockModelPOJO pojo = ClientAssetsManager.INSTANCE.getBedrockModelPOJO(modelId);
         if (pojo == null) return;
