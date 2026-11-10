@@ -51,21 +51,29 @@ public class LrPolyMeshModel extends CustomBedrockModel {
     // レンダリング
     // -------------------------------------------------------------------------
 
+    /**
+     * 【LR Tactical 0.4.4 / TacZ 1.2.0 対応】
+     * LR 0.4.3 以前は 5 引数版の render を、LR 0.4.4 からは描画先バッファ付きの
+     * 6 引数版の render を呼ぶようになった。TacZ 1.2.0 では render のどの版も
+     * 最終的にこの 10 引数版に集約されるため、ここだけを上書きすれば
+     * LR のどのバージョンから呼ばれてもメッシュが描かれる。
+     * （以前は 5 引数版だけを上書きしていたため、LR 0.4.4 ではメッシュが描かれなかった）
+     * 描画先は TacZ / LR から渡されたバッファをそのまま使う。
+     */
     @Override
-    public void render(PoseStack poseStack,
-                       ItemDisplayContext transformType,
-                       RenderType renderType,
-                       int light, int overlay) {
-        super.render(poseStack, transformType, renderType, light, overlay);
-        renderPolyMeshLayer(poseStack, transformType, light, overlay);
+    public void render(PoseStack poseStack, ItemDisplayContext transformType,
+                       RenderType renderType, int light, int overlay,
+                       float red, float green, float blue, float alpha,
+                       MultiBufferSource bufferSource) {
+        super.render(poseStack, transformType, renderType, light, overlay, red, green, blue, alpha, bufferSource);
+        renderPolyMeshLayer(poseStack, transformType, light, overlay, bufferSource);
     }
 
     private void renderPolyMeshLayer(PoseStack poseStack, ItemDisplayContext ctx,
-                                     int light, int overlay) {
+                                     int light, int overlay, MultiBufferSource bufferSource) {
         if (polyMeshModel == null || texture == null) return;
 
         Minecraft mc = Minecraft.getInstance();
-        MultiBufferSource.BufferSource bufferSource = mc.renderBuffers().bufferSource();
 
         // GUI・HEAD などのアイコン/2D表示コンテキストでは、VBO 直接描画が
         // GUI のフレームバッファーに正しく書き込めずアイコンが透明になるため VBO を使わない。
@@ -87,20 +95,11 @@ public class LrPolyMeshModel extends CustomBedrockModel {
         }
 
         polyMeshModel.renderCutoutOnly(poseStack, bufferSource, texture, light, overlay, useVBO);
-        if (!com.tacz.guns.compat.oculus.OculusCompat.endBatch(bufferSource)) {
-            bufferSource.endBatch(RenderType.entityCutoutNoCull(texture));
-            bufferSource.endBatch(RenderType.entityCutout(texture));
-        }
+        com.example.taczmeshloader.render.MeshyBuffers.flushCutout(bufferSource, texture);
 
         if (polyMeshModel.hasTranslucentMeshes()) {
             polyMeshModel.renderTranslucentOnly(poseStack, bufferSource, texture, light, overlay, useVBO);
-            if (!com.tacz.guns.compat.oculus.OculusCompat.endBatch(bufferSource)) {
-                if (net.minecraftforge.fml.ModList.get().isLoaded("oculus")) {
-                    bufferSource.endBatch(RenderType.entityTranslucentCull(texture));
-                } else {
-                    MeshyBatchFlushHandler.markTranslucentPending(texture);
-                }
-            }
+            com.example.taczmeshloader.render.MeshyBuffers.flushTranslucent(bufferSource, texture);
         }
 
         if (!isGuiLike) {
@@ -131,8 +130,8 @@ public class LrPolyMeshModel extends CustomBedrockModel {
                 "geo_models/" + modelLocation.getPath() + ".json"
         );
 
-        // poly_mesh JSON が存在する場合のみロード（なければ通常の cubeモデルとして動作）
-        if (Minecraft.getInstance().getResourceManager().getResource(geoPath).isEmpty()) return;
+        // モデルファイルに poly_mesh が書かれている場合のみロード（なければ通常の cubeモデルとして動作）
+        if (!com.example.taczmeshloader.tacz.GeoMeshProbe.containsPolyMesh(geoPath)) return;
 
         model.loadPolyMesh(geoPath, texture);
     }
