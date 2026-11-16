@@ -5,6 +5,7 @@ import com.tacz.guns.block.entity.GunDisplayBlockEntity;
 import com.tacz.guns.client.renderer.block.DisplayGunMeshGroup;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Coerce;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
@@ -22,6 +23,9 @@ public class DisplayGunMeshGroupMixin {
 
     @Inject(method = "tryRender", at = @At("HEAD"), cancellable = true, require = 0)
     private static void taczmeshloader$skipMeshGuns(GunDisplayBlockEntity owner, int index, int overlay,
+                                                    // 【TacZ 1.2.0-hotfix 対応】TacZ 側で tryRender の引数が1つ増えた（MovingDisplay）ため、
+                                                    // こちらも同じ数だけ受け取る。中身は使わないので Object として受け取る（@Coerce）。
+                                                    @Coerce Object movingDisplay,
                                                     CallbackInfoReturnable<Boolean> cir) {
         if (MeshPresence.gunUsesMesh(owner.getItem(index))) {
             cir.setReturnValue(false);
